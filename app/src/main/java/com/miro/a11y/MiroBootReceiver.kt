@@ -3,11 +3,12 @@ package com.miro.a11y
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 
 /**
- * Auto-rebinds the AccessibilityService after reboot.
+ * Auto-rebinds the AccessibilityService after reboot / screen on / user present.
  *
  * Problem: on this tablet (OLAX Magic Q1, Android 12, Allwinner build),
  * Android does NOT re-bind accessibility services automatically after boot
@@ -16,11 +17,16 @@ import android.util.Log
  * from enabled_accessibility_services, set accessibility_enabled=0, wait,
  * then re-add the service and set accessibility_enabled=1.
  *
- * This requires WRITE_SECURE_SETTINGS, which is granted via ADB at install:
- *   adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS
+ * This receiver listens to ALL possible boot/wake broadcasts because this
+ * tablet may not deliver BOOT_COMPLETED to non-system apps:
+ *   - BOOT_COMPLETED          (standard, may not fire on stopped apps)
+ *   - LOCKED_BOOT_COMPLETED   (fires before user unlock — direct-boot)
+ *   - QUICKBOOT_POWERON       (Allwinner/mediatek quick boot)
+ *   - USER_PRESENT            (user unlocks the device)
+ *   - SCREEN_ON              (screen turns on — butter-thief pattern)
  *
- * Without that grant, the receiver logs a warning and does nothing (the user
- * would need to toggle the service manually in Settings > Accessibility).
+ * Requires WRITE_SECURE_SETTINGS, granted via ADB at install:
+ *   adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS
  */
 class MiroBootReceiver : BroadcastReceiver() {
 
@@ -33,40 +39,40 @@ class MiroBootReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
-
-        Log.i(TAG, "boot completed — forcing accessibility service re-bind")
+        val action = intent.action
+        Log.i(TAG, "received broadcast: $action — forcing accessibility service re-bind")
 
         try {
+            val resolver = context.contentResolver
+
             // Step 1: remove miro from enabled services, disable accessibility
-            val withoutMiro = OTHER_SERVICES
             Settings.Secure.putString(
-                context.contentResolver,
+                resolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                withoutMiro
+                OTHER_SERVICES
             )
             Settings.Secure.putInt(
-                context.contentResolver,
+                resolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED,
                 0
             )
 
-            // Step 2: wait a moment for Android to process the removal
+            // Step 2: wait for Android to process the removal
             Thread.sleep(2000)
 
             // Step 3: re-add miro and re-enable accessibility
             Settings.Secure.putString(
-                context.contentResolver,
+                resolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                "$withoutMiro:$SERVICE"
+                "$OTHER_SERVICES:$SERVICE"
             )
             Settings.Secure.putInt(
-                context.contentResolver,
+                resolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED,
                 1
             )
 
-            Log.i(TAG, "re-bind triggered — miro should bind within a few seconds")
+            Log.i(TAG, "re-bind triggered via $action")
         } catch (e: SecurityException) {
             Log.w(TAG, "cannot write secure settings — WRITE_SECURE_SETTINGS not granted. " +
                     "Run: adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS")
