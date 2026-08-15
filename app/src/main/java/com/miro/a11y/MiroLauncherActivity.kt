@@ -48,7 +48,6 @@ class MiroLauncherActivity : Activity() {
         // Perform the full a11y toggle in a background thread, then hand off.
         Thread {
             reenableAccessibility()
-            MiroReenableWorker.schedule(this@MiroLauncherActivity)
             runOnUiThread {
                 launchRealLauncher()
                 finish()

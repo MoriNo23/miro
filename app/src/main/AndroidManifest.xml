@@ -2,13 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Needed by WorkManager worker to write secure settings (re-enable a11y
-         service after boot). Granted via ADB:
+    <!-- Needed by MiroLauncherActivity (HOME launcher) to write secure settings
+         and re-enable the a11y service after boot. Granted via ADB:
          pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS -->
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
