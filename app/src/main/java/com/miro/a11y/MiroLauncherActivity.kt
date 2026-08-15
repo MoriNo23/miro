@@ -12,14 +12,16 @@ import android.util.Log
  *
  * 1. LAUNCHER: declares HOME/MAIN/DEFAULT intent-filter so the system launches
  *    it automatically after every boot (the only user-app component Android
- *    starts on its own post-reboot). On this OLAX/Allwinner ROM, plain
+ *    starts on its own post-reboot on this OLAX/Allwinner ROM). Plain
  *    BroadcastReceivers, JobScheduler, AlarmManager and WorkManager are all
  *    blocked from firing after boot for non-system apps — but the launcher is
  *    started by the system directly, so it works.
  *
- * 2. A11Y RE-ENABLE: after reboot the ROM keeps ENABLED_ACCESSIBILITY_SERVICES
- *    intact but forces ACCESSIBILITY_ENABLED=0. We flip that single flag back
- *    to 1, then hand control to the real launcher (ESLauncher) and hide.
+ * 2. A11Y RE-ENABLE: after reboot the ROM forces ACCESSIBILITY_ENABLED=0 even
+ *    though ENABLED_ACCESSIBILITY_SERVICES still lists miro. We perform the full
+ *    toggle (remove miro, disable, wait, re-add miro, enable) which is what
+ *    actually forces the service to re-bind, then hand control to the real
+ *    launcher (ESLauncher) and hide.
  *
  * The user's experience is unchanged: ESLauncher shows as usual, but miro's
  * accessibility service is live after every reboot with no manual action.
@@ -31,8 +33,10 @@ class MiroLauncherActivity : Activity() {
 
     companion object {
         private const val TAG = "miro"
-        // Real launcher to hand control to after enabling a11y.
-        private const val REAL_LAUNCHER = "com.android.launcher3/.ESLauncher"
+        private const val SERVICE = "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
+        private const val OTHER_SERVICES =
+            "bitpit.launcher/bitpit.launcher.lock_screen.LockScreenService:" +
+            "io.github.muntashirakon.AppManager/io.github.muntashirakon.AppManager.accessibility.NoRootAccessibilityService"
         private const val REAL_LAUNCHER_PKG = "com.android.launcher3"
         private const val REAL_LAUNCHER_CLS = "com.android.launcher3.ESLauncher"
     }
@@ -41,29 +45,41 @@ class MiroLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        // Re-enable accessibility service (ROM forces it to 0 after reboot).
-        reenableAccessibility()
-
-        // Safety net: keep WorkManager scheduled in case the launcher path
-        // is ever bypassed.
-        MiroReenableWorker.schedule(this)
-
-        // Hand control to the real launcher and get out of the way.
-        launchRealLauncher()
-        finish()
+        // Perform the full a11y toggle in a background thread, then hand off.
+        Thread {
+            reenableAccessibility()
+            MiroReenableWorker.schedule(this@MiroLauncherActivity)
+            runOnUiThread {
+                launchRealLauncher()
+                finish()
+            }
+        }.start()
     }
 
     private fun reenableAccessibility() {
         try {
             val resolver = contentResolver
-            // ENABLED_ACCESSIBILITY_SERVICES already persists across reboot;
-            // only the enabled flag is forced to 0. Flip it back.
-            Settings.Secure.putInt(
+
+            // Step 1: remove miro from enabled services, disable accessibility
+            Settings.Secure.putString(
                 resolver,
-                Settings.Secure.ACCESSIBILITY_ENABLED,
-                1
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                OTHER_SERVICES
             )
-            Log.i(TAG, "accessibility_enabled set to 1 via launcher")
+            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+
+            // Step 2: wait for Android to process the removal
+            Thread.sleep(2000)
+
+            // Step 3: re-add miro and re-enable accessibility
+            Settings.Secure.putString(
+                resolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                "$OTHER_SERVICES:$SERVICE"
+            )
+            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+
+            Log.i(TAG, "re-bind triggered via launcher toggle")
         } catch (e: SecurityException) {
             Log.w(TAG, "cannot write secure settings — WRITE_SECURE_SETTINGS not granted")
         } catch (e: Exception) {
@@ -79,10 +95,9 @@ class MiroLauncherActivity : Activity() {
                 component = ComponentName(REAL_LAUNCHER_PKG, REAL_LAUNCHER_CLS)
             }
             startActivity(intent)
-            Log.i(TAG, "launched real launcher: $REAL_LAUNCHER")
+            Log.i(TAG, "launched real launcher")
         } catch (e: Exception) {
             Log.e(TAG, "failed to launch real launcher: ${e.message}")
-            // Fallback: generic home intent (system will resolve to default)
             try {
                 val fallback = Intent(Intent.ACTION_MAIN).apply {
                     addCategory(Intent.CATEGORY_HOME)
