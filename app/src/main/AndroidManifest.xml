@@ -4,7 +4,9 @@
 
     <!-- Needed by MiroBootReceiver to write secure settings (re-bind a11y service after boot).
          Granted via ADB: pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS -->
-    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
