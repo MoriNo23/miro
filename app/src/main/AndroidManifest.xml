@@ -2,8 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Needed by MiroBootReceiver to write secure settings (re-bind a11y service after boot).
-         Granted via ADB: pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS -->
+    <!-- Needed by WorkManager worker to write secure settings (re-enable a11y
+         service after boot). Granted via ADB:
+         pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS -->
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
@@ -32,19 +33,7 @@
             </intent-filter>
         </activity>
 
-        <!-- AlarmReceiver: re-enables accessibility after boot via
-             AlarmManager.setAlarmClock() — the only mechanism Android
-             guarantees to fire post-reboot even when this ROM blocks
-             BOOT_COMPLETED delivery to user apps. The receiver re-arms
-             itself every 15 min as a safety net. -->
-        <receiver
-            android:name=".MiroAlarmReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
-
+        <!-- MiroAccessibilityService: the actual a11y service. -->
         <service
             android:name=".MiroAccessibilityService"
             android:exported="true"
