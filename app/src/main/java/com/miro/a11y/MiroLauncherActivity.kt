@@ -32,9 +32,10 @@ class MiroLauncherActivity : Activity() {
         // Force re-bind of the accessibility service via settings toggle
         forceRebind()
 
-        // Schedule the persisted JobScheduler that re-binds after every reboot
-        // (this ROM blocks BOOT_COMPLETED, so we use JobScheduler instead).
-        MiroRebindJobService.schedule(this)
+        // Schedule the AlarmManager.setAlarmClock() that re-enables accessibility
+        // after every reboot (this ROM blocks BOOT_COMPLETED, so we use the
+        // alarm-clock whitelist which Android guarantees post-boot).
+        MiroAlarmReceiver.schedule(this)
 
         finish()
     }

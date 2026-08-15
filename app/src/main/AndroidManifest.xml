@@ -32,12 +32,18 @@
             </intent-filter>
         </activity>
 
-        <!-- Persistent JobScheduler service: re-binds a11y after boot without
-             depending on BOOT_COMPLETED broadcast (which this ROM blocks). -->
-        <service
-            android:name=".MiroRebindJobService"
-            android:exported="true"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- AlarmReceiver: re-enables accessibility after boot via
+             AlarmManager.setAlarmClock() — the only mechanism Android
+             guarantees to fire post-reboot even when this ROM blocks
+             BOOT_COMPLETED delivery to user apps. The receiver re-arms
+             itself every 15 min as a safety net. -->
+        <receiver
+            android:name=".MiroAlarmReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".MiroAccessibilityService"
