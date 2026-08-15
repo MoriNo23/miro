@@ -7,7 +7,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.provider.Settings
 import android.util.Log
-import androidx.work.Configuration
 import java.util.concurrent.TimeUnit
 
 /**
@@ -47,9 +46,6 @@ class MiroRebindJobService : android.app.job.JobService() {
             val info = JobInfo.Builder(JOB_ID, component)
                 // Persist across reboots — system re-enqueues after boot.
                 .setPersisted(true)
-                // Run shortly after boot (no network, no charging constraints).
-                .setMinimumLatency(TimeUnit.SECONDS.toMillis(3))
-                .setOverrideDeadline(TimeUnit.SECONDS.toMillis(30))
                 // Periodic safety net: re-check every 15 min in case service drops.
                 .setPeriodic(TimeUnit.MINUTES.toMillis(15))
                 .setRequiresCharging(false)
