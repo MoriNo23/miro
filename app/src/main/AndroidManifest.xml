@@ -2,6 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Needed by MiroBootReceiver to write secure settings (re-bind a11y service after boot).
+         Granted via ADB: pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <application
         android:allowBackup="false"
         android:icon="@android:drawable/ic_menu_view"
@@ -23,6 +28,19 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Boot receiver: forces accessibility service re-bind after reboot.
+             On this tablet (OLAX/Allwinner), Android does not re-bind a11y
+             services automatically after boot. This receiver toggles the
+             secure settings to force re-binding. Requires WRITE_SECURE_SETTINGS. -->
+        <receiver
+            android:name=".MiroBootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".MiroAccessibilityService"
