@@ -64,9 +64,8 @@ class MiroSocketServer(
         try {
             val reader = BufferedReader(InputStreamReader(socket.inputStream, StandardCharsets.UTF_8))
             val out: OutputStream = socket.outputStream
-            var line: String?
-            while (running && reader.readLine().also { line = it } != null) {
-                val raw = line ?: continue
+            while (running) {
+                val raw = reader.readLine() ?: break
                 if (raw.isBlank()) continue
                 val response = try {
                     val cmd = JSONObject(raw)
