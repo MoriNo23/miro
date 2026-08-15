@@ -10,6 +10,20 @@
         android:theme="@style/Theme.Miro"
         tools:targetApi="31">
 
+        <!-- Launcher activity: takes app out of "stopped" state so the
+             AccessibilityService can bind. Without this, Android marks the
+             app as stopped=true/notLaunched=true and refuses to bind any
+             service from it, even if enabled in Accessibility settings. -->
+        <activity
+            android:name=".MiroLauncherActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".MiroAccessibilityService"
             android:exported="true"
