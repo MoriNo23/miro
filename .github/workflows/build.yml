@@ -13,7 +13,7 @@ jobs:
     env:
       ANDROID_HOME: /opt/android-sdk
       ANDROID_SDK_ROOT: /opt/android-sdk
-      GITHUB_DEPENDENCY_GRAPH_ENABLED: false
+      GRADLE_HOME: /opt/gradle-8.5
 
     steps:
       - uses: actions/checkout@v4
@@ -23,6 +23,14 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
+
+      - name: Install Gradle 8.5 (manual, skip wrapper)
+        run: |
+          curl -sL -o /tmp/gradle-8.5-bin.zip https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          sudo unzip -q /tmp/gradle-8.5-bin.zip -d /opt
+          sudo mv /opt/gradle-8.5 $GRADLE_HOME
+          echo "$GRADLE_HOME/bin" >> $GITHUB_PATH
+          gradle --version
 
       - name: Install Android SDK cmdline-tools
         run: |
@@ -40,14 +48,11 @@ jobs:
             "build-tools;34.0.0" \
             "platform-tools"
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
-
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon --no-init-script
+        run: gradle assembleDebug --no-daemon --no-init-script
 
       - name: Run lint
-        run: ./gradlew lint --no-daemon --no-init-script
+        run: gradle lint --no-daemon --no-init-script
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
