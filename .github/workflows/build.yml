@@ -49,10 +49,10 @@ jobs:
             "platform-tools"
 
       - name: Build debug APK
-        run: /opt/gradle-8.5/bin/gradle assembleDebug --no-daemon --no-init-script
+        run: /opt/gradle-8.5/bin/gradle assembleDebug --no-daemon
 
       - name: Run lint
-        run: /opt/gradle-8.5/bin/gradle lint --no-daemon --no-init-script
+        run: /opt/gradle-8.5/bin/gradle lint --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
