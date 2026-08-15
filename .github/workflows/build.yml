@@ -27,10 +27,10 @@ jobs:
       - name: Install Gradle 8.5 (manual, skip wrapper)
         run: |
           curl -sL -o /tmp/gradle-8.5-bin.zip https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          sudo rm -rf /opt/gradle-8.5
           sudo unzip -q /tmp/gradle-8.5-bin.zip -d /opt
-          sudo mv /opt/gradle-8.5 $GRADLE_HOME
-          echo "$GRADLE_HOME/bin" >> $GITHUB_PATH
-          gradle --version
+          echo "/opt/gradle-8.5/bin" >> $GITHUB_PATH
+          /opt/gradle-8.5/bin/gradle --version
 
       - name: Install Android SDK cmdline-tools
         run: |
@@ -49,10 +49,10 @@ jobs:
             "platform-tools"
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --no-init-script
+        run: /opt/gradle-8.5/bin/gradle assembleDebug --no-daemon --no-init-script
 
       - name: Run lint
-        run: gradle lint --no-daemon --no-init-script
+        run: /opt/gradle-8.5/bin/gradle lint --no-daemon --no-init-script
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
