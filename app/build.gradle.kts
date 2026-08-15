@@ -20,9 +20,22 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            // Use debug keystore for release builds — allows install without a
+            // separate release keystore, while still producing a non-debuggable
+            // APK (release build type does not set debuggable=true).
+            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

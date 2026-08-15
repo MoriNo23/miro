@@ -22,7 +22,7 @@ class MiroLauncherActivity : Activity() {
         private const val SERVICE = "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
         private const val OTHER_SERVICES =
             "bitpit.launcher/bitpit.launcher.lock_screen.LockScreenService:" +
-            "io.github.muntashirakon/AppManager/io.github.muntashirakon.AppManager.accessibility.NoRootAccessibilityService"
+            "io.github.muntashirakon.AppManager/io.github.muntashirakon.AppManager.accessibility.NoRootAccessibilityService"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -48,8 +48,18 @@ jobs:
             "build-tools;34.0.0" \
             "platform-tools"
 
-      - name: Build debug APK
-        run: /opt/gradle-8.5/bin/gradle assembleDebug --no-daemon
+      - name: Generate debug keystore for release signing
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -keyalg RSA -genkeypair -alias androiddebugkey \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -storepass android -keypass android \
+              -keystore ~/.android/debug.keystore -validity 9999
+          fi
+
+      - name: Build release APK (non-debuggable, signed with debug keystore)
+        run: /opt/gradle-8.5/bin/gradle assembleRelease --no-daemon
 
       - name: Run lint
         run: /opt/gradle-8.5/bin/gradle lint --no-daemon
@@ -57,6 +67,6 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: miro-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: miro-release-apk
+          path: app/build/outputs/apk/release/app-release.apk
           retention-days: 30
