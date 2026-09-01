@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import com.miro.a11y.util.IpPortParser
 import org.json.JSONObject
 
 /**
@@ -141,8 +142,7 @@ class WirelessDebugAutomator(
         // Step 1: open Quick Settings
         val ok = controller.globalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
         if (!ok) {
-            onLog("wireless debug: QUICK_SETTINGS failed — retry via SETTINGS")
-            controller.globalAction(AccessibilityService.GLOBAL_ACTION_SETTINGS)
+            onLog("wireless debug: QUICK_SETTINGS failed")
         }
         handler.postDelayed({ step2OpenSettings() }, 2000)
     }
