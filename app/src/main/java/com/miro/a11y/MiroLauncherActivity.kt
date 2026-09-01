@@ -44,6 +44,13 @@ class MiroLauncherActivity : Activity() {
         private const val A11Y_TOGGLE_DELAY_MS = 2000L
         private const val VERIFY_DELAY_MS = 500L
         private const val MAX_RETRIES = 3
+        // Time to wait after the a11y toggle is verified before
+        // we move MiroLauncherActivity to the background. This
+        // gives AccessibilityManagerService time to bind the
+        // MiroAccessibilityService. Without this grace, the bind
+        // race causes the service to never get onServiceConnected
+        // (verified 2026-09-01). 5s is enough for OLAX.
+        private const val BIND_GRACE_MS = 5000L
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,15 +76,12 @@ class MiroLauncherActivity : Activity() {
 
     private fun startToggleSequence(attempt: Int) {
         Log.i(TAG, "toggle attempt $attempt starting")
-        // We need to do blocking writes (Settings.Secure.putString) which
-        // requires the main thread for some operations. The cleanest way
-        // is to do them inline with a Handler.postDelayed for the inter-write
-        // delays.
         if (attempt > MAX_RETRIES) {
             Log.e(TAG, "a11y toggle failed after $MAX_RETRIES attempts — manual fix needed")
             runOnUiThread {
                 launchRealLauncher()
-                finish()
+                moveToBack()  // do NOT finish() — keep the process alive so the
+                              // AccessibilityService stays bound.
             }
             return
         }
@@ -87,12 +91,45 @@ class MiroLauncherActivity : Activity() {
             val ok = attemptToggle(attempt)
             if (ok) {
                 Log.i(TAG, "a11y toggle verified on attempt $attempt")
-                launchRealLauncher()
-                finish()
+                // Wait 5s to let AccessibilityManagerService bind our
+                // MiroAccessibilityService. Without this grace, the
+                // service bind races with the activity tear-down and
+                // MiroAccessibilityService never receives
+                // onServiceConnected (verified 2026-09-01: logcat showed
+                // 'a11y toggle verified' but no 'service connected').
+                mainHandler.postDelayed({
+                    runOnUiThread {
+                        launchRealLauncher()
+                        // DO NOT finish() — that would kill the process
+                        // and unbind the AccessibilityService. Use
+                        // moveTaskToBack + finishAffinity so the
+                        // activity is removed from the visible task but
+                        // the process (and the service) stay alive.
+                        moveToBack()
+                    }
+                }, BIND_GRACE_MS)
             } else {
                 Log.w(TAG, "a11y toggle attempt $attempt/$MAX_RETRIES failed — retrying in 1.5s")
                 mainHandler.postDelayed({ startToggleSequence(attempt + 1) }, 1500L)
             }
+        }
+    }
+
+    /**
+     * Move the activity to background without killing the process.
+     *
+     * finish() would cause Android to evict the process from the
+     * activity stack, which in turn unbinds the AccessibilityService.
+     * By using moveTaskToBack(false) the activity becomes invisible
+     * (ESLauncher takes the foreground) but the process keeps living
+     * so the service can run the WirelessDebugAutomator / Recents flow.
+     */
+    private fun moveToBack() {
+        try {
+            moveTaskToBack(false)
+            Log.i(TAG, "moved to back — process stays alive, service stays bound")
+        } catch (e: Exception) {
+            Log.e(TAG, "moveTaskToBack failed: ${e.message}")
         }
     }
 
