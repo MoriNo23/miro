@@ -62,11 +62,16 @@ class MiroAccessibilityService : AccessibilityService() {
 
         controller = MiroController(this)
 
-        // Start embedded control socket (localhost only, no root needed)
-        if (socketServer == null) {
-            socketServer = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
-            socketServer?.start()
-        }
+        // Start embedded control socket (localhost only, no root needed).
+        // The socket name is in a static var so we can detect and close
+        // any previous server before creating a new one (this happens
+        // every time the user toggles accessibility on/off — the
+        // service gets destroyed and re-created, and the abstract
+        // socket name is still held by the previous process until
+        // GC releases it).
+        MiroSocketServer.closeExisting()
+        socketServer = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
+        socketServer?.start()
 
         // State machine for Wireless Debugging onboarding.
         // Triggered either by socket command {"action":"start_wireless_debug"}

@@ -34,6 +34,40 @@ class MiroSocketServer(
     companion object {
         const val SOCKET_NAME = "miro"
         private const val TAG = "miro.socket"
+
+        // Singleton: the most recent server instance. Used to close
+        // any prior server before creating a new one (the abstract
+        // socket name is a kernel-level resource that lingers after
+        // the JVM closes it; we need to explicitly close any prior
+        // LocalServerSocket that bound to the same name).
+        @Volatile
+        private var lastInstance: MiroSocketServer? = null
+
+        /**
+         * Close any previously created MiroSocketServer that may still
+         * hold the abstract socket name. Safe to call multiple times.
+         * Must be called from the same process — the abstract socket
+         * namespace is per-process, so a previous process can NOT
+         * hold the name after it's been killed.
+         *
+         * However, on accessibility toggle, the SAME process gets
+         * re-bound to the a11y service (it's not killed, just
+         * unbinded/rebinded), and the previous MiroSocketServer
+         * instance is still referenced from a field — so we need to
+         * explicitly close it before opening a new one.
+         */
+        fun closeExisting() {
+            lastInstance?.let { server ->
+                try {
+                    server.stopServer()
+                } catch (_: Exception) {}
+            }
+            lastInstance = null
+        }
+    }
+
+    init {
+        lastInstance = this
     }
 
     @Volatile private var running = true
