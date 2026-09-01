@@ -32,11 +32,11 @@ class MiroAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "miro"
         // Auto-trigger the Wireless Debugging flow after the service connects.
-        // Disabled by default because the automator's click sequence is fragile
-        // on the OLAX ROM — if it fails halfway, the user has to disable/re-enable
-        // the service manually. Flip to true once on-device verification confirms
-        // the full flow works end-to-end.
-        private const val kAutoStartWirelessDebug = false
+        // OLAX Magic Q1 (build china, Android 12) no permite toggle directo de
+        // Settings.Global.adb_wifi_enabled sin pasar por la UI, así que el
+        // automator hace el path: QS → Settings → Developer Options →
+        // Wireless Debugging → click → extraer IP:Port → enviar al PC.
+        private const val kAutoStartWirelessDebug = true
         private const val AUTO_START_DELAY_MS = 8_000L
     }
 
