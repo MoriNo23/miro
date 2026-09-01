@@ -256,19 +256,26 @@ class WirelessDebugAutomator(
                 stopWithError("wireless debug tile not found in QS")
                 return
             }
-            handler.postDelayed({
-                val ok2 = tapByTextMulti(tileTerms, fallback = false)
-                if (!ok2) {
-                    onLog("wireless debug ERROR: tile still not found after swipe-open")
-                    stopWithError("wireless debug tile not found in QS")
-                    return
-                }
-                onLog("wireless debug: tile tapped after swipe-open")
-                handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
-            }, 1500)
+            handler.postDelayed({ step2AfterSwipe(tileTerms) }, 1500)
             return
         }
         onLog("wireless debug: tile tapped")
+        handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
+    }
+
+    /**
+     * Step 2 (post-swipe): re-search for the tile after openQsViaSwipe
+     * has had time to settle.
+     */
+    private fun step2AfterSwipe(tileTerms: List<String>) {
+        if (!running) return
+        val ok2 = tapByTextMulti(tileTerms, fallback = false)
+        if (!ok2) {
+            onLog("wireless debug ERROR: tile still not found after swipe-open")
+            stopWithError("wireless debug tile not found in QS")
+            return
+        }
+        onLog("wireless debug: tile tapped after swipe-open")
         handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
     }
 
