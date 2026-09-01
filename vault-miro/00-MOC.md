@@ -33,4 +33,8 @@ summary: Map of Content — índice navegable del vault-miro.
 - [[05-Diseno/01-state-machine]] — State machine del service de wireless debug
 - [[05-Diseno/02-arquitectura-final]] — Arquitectura final unificada
 
+## 📐 Reglas (anti-alucinación, etc.)
+- [[06-Reglas/01-anti-alucinacion]] — Reglas para que el agente no marque como completed sin verificar
+- [[06-Reglas/02-issues-encontrados]] — Auditoría del trabajo del agente anterior
+
 > **Editado desde local** — Hermes Agent

@@ -19,6 +19,7 @@ Este directorio es un **vault estilo Obsidian** dentro del repo de código de `m
 | [[03-Handoffs/README\|03-Handoffs]] | Handoffs discretos entre sesiones — cada uno ejecutable |
 | [[04-Estrategia/README\|04-Estrategia]] | Plan a futuro, roadmap, decisiones pendientes |
 | [[05-Diseno/README\|05-Diseno]] | Arquitectura, diagramas, prototipos de diseño |
+| [[06-Reglas/README\|06-Reglas]] | Reglas operativas (anti-alucinación, etc.) |
 
 ## MOC (Map of Content)
 
