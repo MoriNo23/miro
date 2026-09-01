@@ -24,6 +24,8 @@ summary: Map of Content — índice navegable del vault-miro.
 - [[03-Handoffs/2026-08-15-miro-autostart-resolved]] — Resuelto el autostart vía HOME launcher
 - [[03-Handoffs/2026-08-15-miro-ci-lasspath-incident]] — Fix CI lasspath
 - [[03-Handoffs/2026-09-01-fusion-wireless]] — Fusión wireless-adb → miro (este proyecto)
+- [[03-Handoffs/2026-09-01-ejecutar-integracion-codigo]] — Handoff ejecutable original (parcial)
+- [[03-Handoffs/2026-09-01-corregir-issues-integracion]] — **Corregir los 4 issues de la auditoría** (prioridad alta)
 
 ## 🚀 Estrategia
 - [[04-Estrategia/01-roadmap]] — Qué sigue después de la fusión
