@@ -63,57 +63,38 @@ class MiroAccessibilityService : AccessibilityService() {
         controller = MiroController(this)
 
         // Start embedded control socket (localhost only, no root needed).
-        // The socket name is in a static var so we can detect and close
-        // any previous server before creating a new one (this happens
-        // every time the user toggles accessibility on/off — the
-        // service gets destroyed and re-created, and the abstract
-        // socket name is still held by the previous process until
-        // GC releases it).
-        //
-        // We retry up to 5 times with exponential backoff because the
-        // OLAX kernel is slow to release the abstract name after a
-        // re-bind (especially right after onUnbind, the kernel needs
-        // more than the 500ms in closeExisting() to fully release).
-        // We do this on a background thread so the main thread is
-        // not blocked.
+        // The socket name is unique per instance ("miro_<pid>_<rand>")
+        // because the Linux kernel on the OLAX Magic Q1 holds
+        // abstract socket names for several seconds after close()
+        // (verified 2026-09-01) — a fixed name like "miro" would
+        // hit "Address already in use" on every re-bind (which
+        // happens every time the user toggles accessibility on/off).
+        // The PC discovers the current name via logcat (search for
+        // "miro socket listening on @").
+        Log.i(TAG, "miro socket will listen on @${MiroSocketServer.SOCKET_NAME}")
         Thread {
             MiroSocketServer.closeExisting()
-            var attempt = 0
-            val maxAttempts = 5
-            var backoffMs = 200L
-            while (attempt < maxAttempts) {
-                attempt++
-                try {
-                    val s = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
-                    s.start()
-                    // Wait for the server thread to actually open the
-                    // socket. The LocalServerSocket bind is synchronous
-                    // inside run(), but s.start() returns immediately.
-                    // We poll openSucceeded for up to 1 second.
-                    var waited = 0
-                    while (waited < 1000 && !s.openSucceeded && s.running) {
-                        try { Thread.sleep(50) } catch (_: InterruptedException) {}
-                        waited += 50
-                    }
-                    if (s.openSucceeded) {
-                        socketServer = s
-                        Log.i(TAG, "miro socket ready (attempt $attempt)")
-                        return@Thread
-                    } else {
-                        // The thread died (likely "Address already in use").
-                        // Stop it and retry.
-                        Log.w(TAG, "miro socket attempt $attempt did not open — retrying in ${backoffMs}ms")
-                        s.stopServer()
-                        try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
-                        backoffMs *= 2
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "miro socket attempt $attempt/$maxAttempts threw: ${e.message} — backing off ${backoffMs}ms")
-                    try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
-                    backoffMs *= 2
+            try {
+                val s = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
+                s.start()
+                // Wait for the server thread to actually open the
+                // socket. The LocalServerSocket bind is synchronous
+                // inside run(), but s.start() returns immediately.
+                // We poll openSucceeded for up to 1 second.
+                var waited = 0
+                while (waited < 1000 && !s.openSucceeded && s.running) {
+                    try { Thread.sleep(50) } catch (_: InterruptedException) {}
+                    waited += 50
                 }
+                if (s.openSucceeded) {
+                    socketServer = s
+                    Log.i(TAG, "miro socket ready on @${MiroSocketServer.SOCKET_NAME}")
+                } else {
+                    Log.e(TAG, "miro socket failed to open on @${MiroSocketServer.SOCKET_NAME} after 1s — PC control disabled")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "miro socket threw: ${e.message} — PC control disabled")
             }
-            Log.e(TAG, "miro socket failed after $maxAttempts attempts — PC control disabled")
         }.start()
 
         // State machine for Wireless Debugging onboarding.

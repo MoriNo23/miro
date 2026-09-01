@@ -32,29 +32,34 @@ class MiroSocketServer(
 ) : Thread() {
 
     companion object {
-        const val SOCKET_NAME = "miro"
         private const val TAG = "miro.socket"
 
         // Singleton: the most recent server instance. Used to close
-        // any prior server before creating a new one (the abstract
-        // socket name is a kernel-level resource that lingers after
-        // the JVM closes it; we need to explicitly close any prior
-        // LocalServerSocket that bound to the same name).
+        // any prior server before creating a new one.
         @Volatile
         private var lastInstance: MiroSocketServer? = null
 
+        // The socket name is unique per instance. We previously used
+        // a fixed name "miro" but the Linux kernel on the OLAX
+        // holds abstract socket names for several seconds after
+        // close(), so every re-bind (after accessibility toggle)
+        // hit "Address already in use". A unique per-instance name
+        // sidesteps the kernel's release delay entirely.
+        //
+        // The PC must forward to whichever name the service is
+        // currently using. We expose it via the Logcat tag "miro"
+        // and the AccessibilityService logs the chosen name on
+        // onServiceConnected.
+        val SOCKET_NAME: String
+            get() = currentName
+
+        @Volatile
+        private var currentName: String = "miro_" + android.os.Process.myPid() + "_" + (System.nanoTime() and 0xFFFF)
+
         /**
          * Close any previously created MiroSocketServer that may still
-         * hold the abstract socket name. Safe to call multiple times.
-         * Must be called from the same process — the abstract socket
-         * namespace is per-process, so a previous process can NOT
-         * hold the name after it's been killed.
-         *
-         * However, on accessibility toggle, the SAME process gets
-         * re-bound to the a11y service (it's not killed, just
-         * unbinded/rebinded), and the previous MiroSocketServer
-         * instance is still referenced from a field — so we need to
-         * explicitly close it before opening a new one.
+         * hold a socket. Safe to call multiple times. No grace period
+         * is needed because the new instance uses a unique name.
          */
         fun closeExisting() {
             lastInstance?.let { server ->
@@ -63,13 +68,12 @@ class MiroSocketServer(
                 } catch (_: Exception) {}
             }
             lastInstance = null
-            // The abstract socket name is a kernel resource that takes
-            // time to release. Empirically 500ms is enough on the OLAX
-            // Magic Q1 (verified 2026-09-01). 250ms was not enough in
-            // some cases (notably cold-boot after a reboot, where the
-            // kernel seems to take longer to GC the prior FD).
-            try { java.lang.Thread.sleep(500) } catch (_: InterruptedException) {}
+            // Pick a new unique name for the next bind.
+            currentName = "miro_" + android.os.Process.myPid() + "_" + (System.nanoTime() and 0xFFFF)
         }
+
+        /** Name the service currently has bound (or will bind next). */
+        fun currentSocketName(): String = currentName
     }
 
     init {
