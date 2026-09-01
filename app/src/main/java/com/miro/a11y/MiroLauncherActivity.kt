@@ -91,38 +91,23 @@ class MiroLauncherActivity : Activity() {
             val ok = attemptToggle(attempt)
             if (ok) {
                 Log.i(TAG, "a11y toggle verified on attempt $attempt")
-                // SECOND TOGGLE to force the bind (OLAX quirk: the first
-                // toggle verifies in settings but AccessibilityManagerService
-                // does not always wake up to bind the service. Verified
-                // 2026-09-01: logcat showed 'a11y toggle verified' but
-                // NO 'miro accessibility service connected' — the bind was
-                // never triggered. Forcing a second disable+enable cycle
-                // after the first verify made the bind reliable in testing.
+                // Wait BIND_GRACE_MS to let AccessibilityManagerService
+                // bind our MiroAccessibilityService. Without this grace,
+                // the service bind races with the activity tear-down and
+                // MiroAccessibilityService never receives
+                // onServiceConnected (verified 2026-09-01: logcat showed
+                // 'a11y toggle verified' but no 'service connected').
                 mainHandler.postDelayed({
-                    val ok2 = attemptToggle(attempt + 100)  // use unique attempt number
-                    if (ok2) {
-                        Log.i(TAG, "a11y second toggle verified — service should be bound now")
-                    } else {
-                        Log.w(TAG, "a11y second toggle failed — service may not bind")
+                    runOnUiThread {
+                        launchRealLauncher()
+                        // DO NOT finish() — that would kill the process
+                        // and unbind the AccessibilityService. Use
+                        // moveTaskToBack so the activity is removed from
+                        // the visible task but the process (and the
+                        // service) stay alive.
+                        moveToBack()
                     }
-                    // Wait 5s to let AccessibilityManagerService bind our
-                    // MiroAccessibilityService. Without this grace, the
-                    // service bind races with the activity tear-down and
-                    // MiroAccessibilityService never receives
-                    // onServiceConnected (verified 2026-09-01: logcat showed
-                    // 'a11y toggle verified' but no 'service connected').
-                    mainHandler.postDelayed({
-                        runOnUiThread {
-                            launchRealLauncher()
-                            // DO NOT finish() — that would kill the process
-                            // and unbind the AccessibilityService. Use
-                            // moveTaskToBack + finishAffinity so the
-                            // activity is removed from the visible task but
-                            // the process (and the service) stay alive.
-                            moveToBack()
-                        }
-                    }, BIND_GRACE_MS)
-                }, 1500L)
+                }, BIND_GRACE_MS)
             } else {
                 Log.w(TAG, "a11y toggle attempt $attempt/$MAX_RETRIES failed — retrying in 1.5s")
                 mainHandler.postDelayed({ startToggleSequence(attempt + 1) }, 1500L)
@@ -178,33 +163,24 @@ class MiroLauncherActivity : Activity() {
         return false
     }
 
-    /** Single toggle attempt. Returns true if all 3 writes verified correctly. */
+    /** Single toggle attempt. Returns true if all writes verified correctly. */
     private fun attemptToggle(attempt: Int): Boolean {
         val cr = contentResolver
 
-        // Read current list dynamically (issue 4 — no OTHER_SERVICES constant).
-        // Strip any entry that resolves to com.miro.a11y/.MiroAccessibilityService
-        // regardless of whether it's stored in the short form (com.miro.a11y/cls)
-        // or full form (com.miro.a11y/com.miro.a11y.MiroAccessibilityService).
-        // This prevents duplicate entries on the next toggle when the user
-        // added the service manually with a different format.
-        val current = Settings.Secure.getString(
-            cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: ""
+        // Strategy: do NOT remove the service from the list. Just
+        // toggle ACCESSIBILITY_ENABLED 0 → 1. This forces the
+        // AccessibilityManagerService to:
+        //   1. Unbind the service (flag = 0)
+        //   2. Re-discover enabled services (still has our entry in
+        //      the list, so we are still a candidate)
+        //   3. Re-bind the service (flag = 1)
+        //
+        // The previous implementation removed our entry from the
+        // list, then re-added it. That made the system think there
+        // was a different list at flag=0 vs flag=1, and the bind
+        // never happened on the OLAX ROM (verified 2026-09-01).
 
-        val filtered = current.split(":")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .filter { entry ->
-                val pkg = entry.substringBefore("/")
-                pkg != SERVICE_PKG
-            }
-            .joinToString(":")
-
-        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, filtered)
-        Thread.sleep(VERIFY_DELAY_MS)
-
-        // Step 2: Disable accessibility
+        // Step 1: Disable accessibility (this unbinds any service).
         Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
         Thread.sleep(VERIFY_DELAY_MS)
         if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 0) {
@@ -212,24 +188,13 @@ class MiroLauncherActivity : Activity() {
             return false
         }
 
-        // Step 3: Wait for the system to process the disable
+        // Step 2: Wait for the system to process the disable and
+        // unbind any previously-bound service. OLAX needs 2s here.
         Thread.sleep(A11Y_TOGGLE_DELAY_MS)
 
-        // Step 4: Re-add our service in canonical form
-        val newList = if (filtered.isEmpty()) SERVICE_CANONICAL else "$filtered:$SERVICE_CANONICAL"
-        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newList)
-        Thread.sleep(VERIFY_DELAY_MS)
-        // Verify by package, not by full string (in case Android normalizes the format)
-        val after = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
-        val ourEntries = after.split(":").map { it.trim() }.filter {
-            it.substringBefore("/") == SERVICE_PKG
-        }
-        if (ourEntries.isEmpty()) {
-            Log.w(TAG, "[$attempt] re-add verification failed (no entry for $SERVICE_PKG)")
-            return false
-        }
-
-        // Step 5: Enable accessibility
+        // Step 3: Re-enable accessibility. This triggers a
+        // re-evaluation of the list (which already has our entry
+        // since we did not modify it), and the bind should happen.
         Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
         Thread.sleep(VERIFY_DELAY_MS)
         if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 1) {
