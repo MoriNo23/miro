@@ -2,4 +2,17 @@
 <resources>
     <string name="app_name">miro</string>
     <string name="accessibility_service_description">miro — Accessibility service for tablet control. Gestures, taps, screen reading, and global actions.</string>
+
+    <!-- MainActivity (wireless ADB setup) -->
+    <string name="setup_adb_title">Configurar ADB inalámbrico</string>
+    <string name="btn_setup_adb">Configurar ADB</string>
+    <string name="btn_refresh_status">Actualizar estado</string>
+    <string name="status_idle">Listo. Presiona el botón para iniciar.</string>
+    <string name="status_detecting">Detectando diálogo de depuración...</string>
+    <string name="status_extracting">Extrayendo IP:puerto...</string>
+    <string name="status_sending">Enviando al host...</string>
+    <string name="status_done">¡Listo! Depuración wireless configurada.</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="toast_setup_complete">Depuración inalámbrica configurada.</string>
+    <string name="toast_error">Error: %1$s</string>
 </resources>

@@ -39,6 +39,35 @@
             </intent-filter>
         </activity>
 
+        <!-- BootLauncherActivity: alias HOME launcher declared by the
+             fusion-wireless handoff. Thin wrapper over MiroLauncherActivity
+             so both names resolve to the same post-boot a11y re-enable flow.
+             Kept alongside MiroLauncherActivity for forward-compat naming. -->
+        <activity
+            android:name=".BootLauncherActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- MainActivity: UI for Wireless Debugging setup (botón "Configurar ADB"). -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Miro">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- MiroAccessibilityService: the actual a11y service. -->
         <service
             android:name=".MiroAccessibilityService"
