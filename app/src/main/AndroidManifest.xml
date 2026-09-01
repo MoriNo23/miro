@@ -68,6 +68,26 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- WirelessDebugTileService: Quick Settings tile for the
+             auto-start wireless debug flow. The user can add it
+             to the QS panel via long-press on QS > edit. Tapping
+             the tile toggles MiroAccessibilityService.kAutoStartWirelessDebug
+             so the QS-tile wireless debug flow does NOT run on
+             onServiceConnected() if the user disabled it. -->
+        <service
+            android:name=".WirelessDebugTileService"
+            android:exported="true"
+            android:label="@string/tile_wireless_debug"
+            android:icon="@android:drawable/ic_menu_view"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.ACTIVE_TILE"
+                android:value="false" />
+        </service>
+
         <!-- MiroAccessibilityService: the single accessibility service.
              Wireless debug state machine lives inside this class via
              WirelessDebugAutomator (audit 2026-09-01: ONE service only). -->

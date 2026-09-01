@@ -41,7 +41,11 @@ class MiroAccessibilityService : AccessibilityService() {
         // The flow runs 8s after onServiceConnected() so the user can see
         // the QS open and (if needed) intervene. It is a no-op if
         // adb_wifi_enabled is already 1.
-        private const val kAutoStartWirelessDebug = true
+        //
+        // This is a `var` (not `const val`) so the WirelessDebugTileService
+        // QS tile can flip it at runtime when the user toggles the tile.
+        @JvmField
+        var kAutoStartWirelessDebug: Boolean = true
         private const val AUTO_START_DELAY_MS = 8_000L
     }
 

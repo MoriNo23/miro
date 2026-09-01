@@ -15,4 +15,7 @@
     <string name="status_error">Error: %1$s</string>
     <string name="toast_setup_complete">Depuración inalámbrica configurada.</string>
     <string name="toast_error">Error: %1$s</string>
+
+    <!-- Quick Settings tile (WirelessDebugTileService) -->
+    <string name="tile_wireless_debug">Auto-WirelessDebug</string>
 </resources>
