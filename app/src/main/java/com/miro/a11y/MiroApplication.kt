@@ -43,6 +43,7 @@ class MiroApplication : Application() {
 
     companion object {
         private const val TAG = "miro"
+        private const val SERVICE_CANONICAL = "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
 
         // Toggle robustness constants (must match MiroLauncherActivity)
         private const val A11Y_TOGGLE_DELAY_MS = 2000L
@@ -132,6 +133,19 @@ class MiroApplication : Application() {
     private fun attemptToggle(attempt: Int): Boolean {
         val cr = contentResolver
 
+        // v1.4.14: Before toggling ACCESSIBILITY_ENABLED, re-ensure
+        // that our service is in ENABLED_ACCESSIBILITY_SERVICES.
+        // This is a defensive fix for the case where the system
+        // removed our service from the list (e.g. after force-stop,
+        // reinstall, or a write from another app). The OLAX ROM is
+        // particularly aggressive about this.
+        try {
+            ensureServiceInList()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "[$attempt] ensureServiceInList failed: ${e.message}")
+            return false
+        }
+
         // Strategy: do NOT remove the service from the list. Just
         // toggle ACCESSIBILITY_ENABLED 0 → 1. This forces the
         // AccessibilityManagerService to:
@@ -187,6 +201,45 @@ class MiroApplication : Application() {
             } catch (e2: Exception) {
                 Log.e(TAG, "fallback home launch failed: ${e2.message}")
             }
+        }
+    }
+
+    /**
+     * Re-add our accessibility service to ENABLED_ACCESSIBILITY_SERVICES
+     * if it is missing. This handles the OLAX ROM's tendency to silently
+     * drop the entry from the list on force-stop, reinstall, or other
+     * system events.
+     *
+     * The pattern (handoff 2026-09-01):
+     *   1. Read the current list
+     *   2. Split by ":"
+     *   3. Filter to remove any duplicates of our service (any format)
+     *   4. If our canonical form is not present, add it at the front
+     *   5. Write back the joined list
+     *   6. Preserve any other services (AppManager, etc.) — never
+     *      hardcode their presence/absence
+     */
+    private fun ensureServiceInList() {
+        val cr = contentResolver
+        val current = Settings.Secure.getString(
+            cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: ""
+        val list = current.split(":").filter { it.isNotBlank() }
+        // Filter out any duplicates of our service (in any format)
+        val filtered = list.filter { !it.contains("com.miro.a11y") }
+        val newList = if (filtered.isEmpty()) {
+            listOf(SERVICE_CANONICAL)
+        } else {
+            listOf(SERVICE_CANONICAL) + filtered
+        }
+        val newValue = newList.joinToString(":")
+        if (newValue != current) {
+            Settings.Secure.putString(
+                cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newValue
+            )
+            Log.i(TAG, "ensureServiceInList: '$current' → '$newValue'")
+        } else {
+            Log.i(TAG, "ensureServiceInList: no change, already in list")
         }
     }
 }
