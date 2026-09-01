@@ -31,22 +31,19 @@ class MiroAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "miro"
-    }
-
-    private lateinit var controller: MiroController
-    private var socketServer: MiroSocketServer? = null
-    private var wirelessAutomator: WirelessDebugAutomator? = null
-
-    // Auto-trigger the Wireless Debugging flow after the service connects.
-    // Disabled by default (kManualTrigger = true) because the automator's
-    // click sequence is fragile on the OLAX ROM — if it fails halfway, the
-    // user has to disable/re-enable the service manually. Flip to false
-    // (or remove the gate) once on-device verification confirms the flow.
-    companion object {
-        private const val TAG = "miro"
+        // Auto-trigger the Wireless Debugging flow after the service connects.
+        // Disabled by default because the automator's click sequence is fragile
+        // on the OLAX ROM — if it fails halfway, the user has to disable/re-enable
+        // the service manually. Flip to true once on-device verification confirms
+        // the full flow works end-to-end.
         private const val kAutoStartWirelessDebug = false
         private const val AUTO_START_DELAY_MS = 8_000L
     }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var controller: MiroController
+    private var socketServer: MiroSocketServer? = null
+    private var wirelessAutomator: WirelessDebugAutomator? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -68,12 +65,12 @@ class MiroAccessibilityService : AccessibilityService() {
         // is already on (so we don't loop forever). Guarded by kAutoStartWirelessDebug
         // so the user can opt out without touching code.
         if (kAutoStartWirelessDebug) {
-            handler.postDelayed({
+            mainHandler.postDelayed({
                 if (isWirelessDebugAlreadyOn()) {
                     Log.i(TAG, "auto-start skipped: adb_wifi_enabled already 1")
                     return@postDelayed
                 }
-                Log.i(TAG, "auto-start: triggering wireless debug flow after $AUTO_START_DELAY_MS ms")
+                Log.i(TAG, "auto-start: triggering wireless debug flow")
                 startWirelessDebug()
             }, AUTO_START_DELAY_MS)
         }
