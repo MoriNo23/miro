@@ -48,14 +48,21 @@
         android:textColor="@color/recents_fg_dim"
         android:textSize="13sp" />
 
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/recyclerRecents"
+    <ScrollView
+        android:id="@+id/scrollRecents"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="12dp"
         android:clipToPadding="false"
-        android:scrollbars="vertical" />
+        android:scrollbars="vertical">
+
+        <LinearLayout
+            android:id="@+id/recyclerRecents"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
 
     <TextView
         android:id="@+id/lblEmpty"
