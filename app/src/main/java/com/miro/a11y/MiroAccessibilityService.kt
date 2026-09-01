@@ -120,6 +120,18 @@ class MiroAccessibilityService : AccessibilityService() {
         }
     }
 
+    override fun onUnbind(intent: android.content.Intent?): Boolean {
+        super.onUnbind(intent)
+        Log.w(TAG, "onUnbind — releasing socket")
+        socketServer?.stopServer()
+        socketServer = null
+        MiroSocketServer.closeExisting()
+        // Brief delay so the kernel releases the abstract socket name
+        // before the next onServiceConnected() tries to rebind.
+        try { Thread.sleep(200) } catch (_: InterruptedException) {}
+        return true
+    }
+
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt — cleaning up wireless automator")
         wirelessAutomator?.stop()

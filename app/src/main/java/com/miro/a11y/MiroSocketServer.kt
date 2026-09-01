@@ -63,6 +63,10 @@ class MiroSocketServer(
                 } catch (_: Exception) {}
             }
             lastInstance = null
+            // Brief delay so the kernel releases the abstract socket name
+            // before the caller opens a new one. Empirically 200ms is enough
+            // on the OLAX Magic Q1 (verified 2026-09-01).
+            try { java.lang.Thread.sleep(250) } catch (_: InterruptedException) {}
         }
     }
 
