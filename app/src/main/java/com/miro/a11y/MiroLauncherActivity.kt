@@ -71,13 +71,20 @@ class MiroLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        // v1.4.14: Theme.NoDisplay requires the activity to be invisible.
-        // Schedule the toggle work on the static appHandler (Application-level)
-        // so it survives the finish() call below, then finish() immediately.
+        // v1.4.15: Revert to Theme.Translucent behavior — don't call
+        // finish() in onCreate. The Theme.NoDisplay path killed the
+        // process before the handler.post could fire on OLAX.
+        //
+        // Instead: schedule the toggle on the application-level
+        // handler so it survives activity destruction, but keep
+        // the activity alive (moveToBack) until the toggle + grace
+        // completes. This gives the user ESLauncher in the foreground
+        // during the toggle.
         val handler = appHandler
         if (handler == null) {
-            Log.e(TAG, "MiroApplication not initialized — finish() only, service won't auto-bind")
-            finish()
+            Log.e(TAG, "MiroApplication not initialized — skipping toggle")
+            launchRealLauncher()
+            moveToBack()
             return
         }
 
@@ -86,21 +93,59 @@ class MiroLauncherActivity : Activity() {
             Log.e(TAG, "WRITE_SECURE_SETTINGS not granted — cannot toggle a11y. " +
                     "User must run: adb shell pm grant com.miro.a11y " +
                     "android.permission.WRITE_SECURE_SETTINGS")
-            handler.post { MiroApplication.runToggleAndHandoff() }
-            finish()
+            launchRealLauncher()
+            moveToBack()
             return
         }
 
-        // Schedule toggle on Application-level Handler, then finish() NOW.
-        // The toggle continues to run in the process even after this
-        // activity is destroyed.
+        // Schedule toggle on Application-level Handler, then moveToBack
+        // so ESLauncher takes the foreground. The toggle continues to
+        // run in the process (Application context) even while the
+        // activity is in the background.
         handler.post { MiroApplication.runToggleAndHandoff() }
-        finish()
+        moveToBack()
     }
 
     private fun hasWriteSecureSettings(): Boolean {
         return checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
                 PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Move the activity to the background without killing the process.
+     * ESLauncher (the real launcher) takes the foreground. The
+     * MiroApplication context keeps running the toggle + service.
+     */
+    private fun moveToBack() {
+        try {
+            moveTaskToBack(false)
+            Log.i(TAG, "moved to back — process stays alive, service stays bound")
+        } catch (e: Exception) {
+            Log.e(TAG, "moveTaskToBack failed: ${e.message}")
+        }
+    }
+
+    private fun launchRealLauncher() {
+        try {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_HOME)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                component = ComponentName(REAL_LAUNCHER_PKG, REAL_LAUNCHER_CLS)
+            }
+            startActivity(intent)
+            Log.i(TAG, "launched real launcher (ESLauncher)")
+        } catch (e: Exception) {
+            Log.e(TAG, "failed to launch real launcher: ${e.message}")
+            try {
+                val fallback = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(fallback)
+            } catch (e2: Exception) {
+                Log.e(TAG, "fallback home launch failed: ${e2.message}")
+            }
+        }
     }
 }
 

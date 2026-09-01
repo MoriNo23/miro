@@ -35,9 +35,8 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:taskAffinity=""
-            android:noHistory="true"
             android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.NoDisplay">
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
