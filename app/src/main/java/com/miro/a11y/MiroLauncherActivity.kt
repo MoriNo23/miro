@@ -26,6 +26,16 @@ import android.util.Log
  */
 class MiroLauncherActivity : Activity() {
 
+    // Dedicated background thread for the a11y toggle work. We do NOT
+    // use a plain Thread{} because the OLAX ROM kills processes whose
+    // only running activity is not the top resumed activity (the
+    // toggle takes ~3s due to inter-write sleeps, and the activity
+    // moves to background as soon as we call launchRealLauncher()).
+    // A HandlerThread + looper keeps the process alive while the
+    // toggle writes complete.
+    private val handlerThread = android.os.HandlerThread("miro-launcher-toggle")
+    private val handler by lazy { android.os.Handler(handlerThread.looper) }
+
     companion object {
         private const val TAG = "miro"
         // Canonical form: short class name. The system may also accept/store
@@ -50,13 +60,26 @@ class MiroLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        Thread {
-            reenableAccessibility()
-            runOnUiThread {
-                launchRealLauncher()
-                finish()
-            }
-        }.start()
+        // Run the toggle on a dedicated background HandlerThread so the
+        // work continues even if the activity gets finished/moved to
+        // background quickly. The toggle sleeps ~3s (delays between
+        // setting writes); a plain Thread{} on a process with
+        // singleTask + taskAffinity="" can be killed by the OLAX ROM
+        // when the activity is no longer the top resumed activity.
+        handlerThread.start()
+        handlerThread.looper.queue.addIdleHandler {
+            // Post the work once the looper is up and running
+            handler.post { reenableAccessibilityAndLaunch() }
+            false  // run once
+        }
+    }
+
+    private fun reenableAccessibilityAndLaunch() {
+        reenableAccessibility()
+        runOnUiThread {
+            launchRealLauncher()
+            finish()
+        }
     }
 
     /**
