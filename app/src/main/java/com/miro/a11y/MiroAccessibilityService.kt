@@ -111,6 +111,19 @@ class MiroAccessibilityService : AccessibilityService() {
             Log.i(TAG, "notification: kill all recent tapped")
             startKillAllRecents()
         }
+        // Wire the static RecentsActionReceiver callbacks (declared in
+        // AndroidManifest.xml so they survive service rebinds). This
+        // replaces the previous dynamic registerReceiver which raced
+        // with re-binds and caused the notification button to silently
+        // do nothing (user-reported 2026-09-01).
+        RecentsActionReceiver.onKillAllCallback = {
+            Log.i(TAG, "recents action: kill-all fired")
+            startKillAllRecents()
+        }
+        RecentsActionReceiver.onOpenRecentsCallback = {
+            Log.i(TAG, "recents action: open-recents fired")
+            startOpenRecents()
+        }
         recentTasksNotifier?.show()
 
         if (kAutoStartWirelessDebug) {
@@ -196,6 +209,44 @@ class MiroAccessibilityService : AccessibilityService() {
         }
         cleaner.start()
         return true
+    }
+
+    /**
+     * Open the Recents task switcher. Triggered from the new
+     * "Abrir recientes" notification action (v1.4.13).
+     *
+     * OLAX gotcha: GLOBAL_ACTION_RECENTS on OLAX opens the notification
+     * shade, not the real Recents screen (verified 2026-09-01). So we
+     * fire a synthetic KEYCODE_APP_SWITCH instead via the controller,
+     * which on OLAX ESLauncher maps to the system Recents.
+     *
+     * If that fails too, we fall back to launching the RecentsActivity
+     * directly (it is exported via intent-filter on the OLAX system).
+     */
+    fun startOpenRecents(): Boolean {
+        return try {
+            val ok = controller.recents()
+            if (ok) {
+                Log.i(TAG, "startOpenRecents: dispatched GLOBAL_ACTION_RECENTS")
+                return true
+            }
+            // Fallback: try the system RecentsActivity directly
+            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                addCategory(android.content.Intent.CATEGORY_HOME)
+                addCategory("android.intent.category.LAUNCHER")
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                setClassName(
+                    "com.android.launcher3",
+                    "com.android.quickstep.RecentsActivity"
+                )
+            }
+            startActivity(intent)
+            Log.i(TAG, "startOpenRecents: launched RecentsActivity as fallback")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "startOpenRecents: both paths failed: ${e.message}")
+            false
+        }
     }
 }
 
