@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.Miro" parent="android:Theme.Material.NoActionBar" />
+    <!-- Theme for the custom Recents overview screen (v1.4.22+).
+         Fullscreen dark, no action bar, no status bar overlay so
+         the list owns the whole display. -->
+    <style name="Theme.Miro.Recents" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/recents_bg</item>
+        <item name="android:textColorPrimary">@color/recents_fg</item>
+        <item name="android:textColorSecondary">@color/recents_fg_dim</item>
+    </style>
 </resources>

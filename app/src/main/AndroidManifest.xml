@@ -14,6 +14,17 @@
          "Cerrar recientes" persistent notification (RecentTasksNotifier). -->
     <uses-permission
         android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Required by RecentsOverviewActivity (v1.4.22+) to list the
+         running tasks. Deprecated on API 21+ but still functional
+         for what we need (a partial list of foreground + visible
+         tasks). -->
+    <uses-permission
+        android:name="android.permission.GET_TASKS" />
+    <!-- Required to actually kill background processes from the
+         AccessibilityService callback. protectionLevel: normal,
+         granted at install time, no runtime prompt needed. -->
+    <uses-permission
+        android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
 
     <application
         android:name=".MiroApplication"
@@ -114,6 +125,20 @@
                 <action android:name="com.miro.a11y.OPEN_RECENTS" />
             </intent-filter>
         </activity>
+
+        <!-- RecentsOverviewActivity (v1.4.22+): fullscreen custom
+             recents UI. Used as the destination for the
+             "Abrir recientes" notification action (instead of
+             launching the OLAX RecentsActivity which is broken /
+             throttled by Quickstep). Lists running tasks, lets
+             the user close one or all. launched by RecentsActionActivity
+             so it is not directly exported (defense in depth). -->
+        <activity
+            android:name=".RecentsOverviewActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Miro.Recents" />
 
     </application>
 

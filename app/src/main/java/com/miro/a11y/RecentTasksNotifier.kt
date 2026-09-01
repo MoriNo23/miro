@@ -59,13 +59,22 @@ class RecentTasksNotifier(
      * receiver into the AccessibilityService. The fix is to point the
      * PendingIntent directly at the (exported) `RecentsActionActivity`
      * — an Activity is a valid final destination, not a trampoline.
+     *
+     * Pre-1.4.22: "Abrir recientes" pointed at the empty
+     * `RecentsActionActivity` which only fired a GLOBAL_ACTION_RECENTS
+     * (broken on OLAX). v1.4.22 makes "Abrir recientes" open our own
+     * `RecentsOverviewActivity` fullscreen with a real list of
+     * running apps. "Cerrar recientes" still routes through
+     * `RecentsActionActivity` to keep the static-callback path simple.
      */
     fun buildActionPendingIntent(action: String, requestCode: Int): PendingIntent {
+        val targetClass = if (action == ACTION_OPEN_RECENTS) {
+            "com.miro.a11y.RecentsOverviewActivity"
+        } else {
+            "com.miro.a11y.RecentsActionActivity"
+        }
         val intent = Intent(action)
-            .setClassName(context, "com.miro.a11y.RecentsActionActivity")
-            // The action string ("com.miro.a11y.KILL_ALL_RECENT") is also
-            // the package-scoped identifier; we still set package so the
-            // activity gate in onCreate is consistent.
+            .setClassName(context, targetClass)
             .setPackage(context.packageName)
         return PendingIntent.getActivity(
             context, requestCode, intent,

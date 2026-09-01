@@ -1,6 +1,8 @@
 package com.miro.a11y
 
 import android.accessibilityservice.AccessibilityService
+import android.app.ActivityManager
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -47,6 +49,32 @@ class MiroAccessibilityService : AccessibilityService() {
         @JvmField
         var kAutoStartWirelessDebug: Boolean = true
         private const val AUTO_START_DELAY_MS = 8_000L
+
+        /**
+         * Kill the background processes of [packageName] from a
+         * static context. Used by RecentsOverviewActivity (v1.4.22+)
+         * to close individual apps from the custom recents UI.
+         *
+         * Requires the KILL_BACKGROUND_PROCESSES permission (added
+         * in v1.4.22). Returns true if at least one process was
+         * killed, false otherwise (no-op for foreground apps since
+         * we cannot force-stop without the system signature).
+         */
+        @JvmStatic
+        fun killPackageStatic(packageName: String): Boolean {
+            val ctx = currentInstance ?: return false
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            return try {
+                am.killBackgroundProcesses(packageName)
+                Log.i(TAG, "recents overview: killBackgroundProcesses($packageName) ok")
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "recents overview: killBackgroundProcesses($packageName) failed: ${e.message}")
+                false
+            }
+        }
+
+        @Volatile private var currentInstance: MiroAccessibilityService? = null
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -60,6 +88,7 @@ class MiroAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "miro accessibility service connected")
+        currentInstance = this
 
         controller = MiroController(this)
 
@@ -168,6 +197,7 @@ class MiroAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         super.onUnbind(intent)
         Log.w(TAG, "onUnbind — releasing socket")
+        currentInstance = null
         rotationWatchdog?.unregister()
         rotationWatchdog = null
         socketServer?.stopServer()

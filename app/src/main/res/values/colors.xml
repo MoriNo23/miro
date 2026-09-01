@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Recents overview palette (v1.4.22+). Dark, low-glare,
+         designed for the OLAX Magic Q1 IPS panel in landscape. -->
+    <color name="recents_bg">#FF101418</color>
+    <color name="recents_fg">#FFEFEFEF</color>
+    <color name="recents_fg_dim">#FF8A8F95</color>
+    <color name="recents_card">#FF1B2026</color>
+    <color name="recents_accent">#FF4FC3F7</color>
+    <color name="recents_danger">#FFEF5350</color>
+</resources>

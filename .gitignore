@@ -8,3 +8,5 @@
 .externalNativeBuild
 .cxx
 /app/build
+# CI artifact downloads
+/miro-release-apk/
