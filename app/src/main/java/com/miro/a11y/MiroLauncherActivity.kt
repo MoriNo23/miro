@@ -91,23 +91,38 @@ class MiroLauncherActivity : Activity() {
             val ok = attemptToggle(attempt)
             if (ok) {
                 Log.i(TAG, "a11y toggle verified on attempt $attempt")
-                // Wait 5s to let AccessibilityManagerService bind our
-                // MiroAccessibilityService. Without this grace, the
-                // service bind races with the activity tear-down and
-                // MiroAccessibilityService never receives
-                // onServiceConnected (verified 2026-09-01: logcat showed
-                // 'a11y toggle verified' but no 'service connected').
+                // SECOND TOGGLE to force the bind (OLAX quirk: the first
+                // toggle verifies in settings but AccessibilityManagerService
+                // does not always wake up to bind the service. Verified
+                // 2026-09-01: logcat showed 'a11y toggle verified' but
+                // NO 'miro accessibility service connected' — the bind was
+                // never triggered. Forcing a second disable+enable cycle
+                // after the first verify made the bind reliable in testing.
                 mainHandler.postDelayed({
-                    runOnUiThread {
-                        launchRealLauncher()
-                        // DO NOT finish() — that would kill the process
-                        // and unbind the AccessibilityService. Use
-                        // moveTaskToBack + finishAffinity so the
-                        // activity is removed from the visible task but
-                        // the process (and the service) stay alive.
-                        moveToBack()
+                    val ok2 = attemptToggle(attempt + 100)  // use unique attempt number
+                    if (ok2) {
+                        Log.i(TAG, "a11y second toggle verified — service should be bound now")
+                    } else {
+                        Log.w(TAG, "a11y second toggle failed — service may not bind")
                     }
-                }, BIND_GRACE_MS)
+                    // Wait 5s to let AccessibilityManagerService bind our
+                    // MiroAccessibilityService. Without this grace, the
+                    // service bind races with the activity tear-down and
+                    // MiroAccessibilityService never receives
+                    // onServiceConnected (verified 2026-09-01: logcat showed
+                    // 'a11y toggle verified' but no 'service connected').
+                    mainHandler.postDelayed({
+                        runOnUiThread {
+                            launchRealLauncher()
+                            // DO NOT finish() — that would kill the process
+                            // and unbind the AccessibilityService. Use
+                            // moveTaskToBack + finishAffinity so the
+                            // activity is removed from the visible task but
+                            // the process (and the service) stay alive.
+                            moveToBack()
+                        }
+                    }, BIND_GRACE_MS)
+                }, 1500L)
             } else {
                 Log.w(TAG, "a11y toggle attempt $attempt/$MAX_RETRIES failed — retrying in 1.5s")
                 mainHandler.postDelayed({ startToggleSequence(attempt + 1) }, 1500L)
