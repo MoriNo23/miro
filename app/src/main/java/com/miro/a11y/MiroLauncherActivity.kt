@@ -71,39 +71,29 @@ class MiroLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        // v1.4.15: Revert to Theme.Translucent behavior — don't call
-        // finish() in onCreate. The Theme.NoDisplay path killed the
-        // process before the handler.post could fire on OLAX.
+        // v1.4.17: Run the toggle on a background Thread that survives
+        // activity destruction. The activity will be killed by OLAX
+        // when ESLauncher takes the foreground (and moveToBack is
+        // unreliable on the OLAX ROM), so we use a daemon thread
+        // that holds the process alive by referencing MiroApplication.
         //
-        // Instead: schedule the toggle on the application-level
-        // handler so it survives activity destruction, but keep
-        // the activity alive (moveToBack) until the toggle + grace
-        // completes. This gives the user ESLauncher in the foreground
-        // during the toggle.
-        val handler = appHandler
-        if (handler == null) {
-            Log.e(TAG, "MiroApplication not initialized — skipping toggle")
-            launchRealLauncher()
-            moveToBack()
-            return
-        }
-
-        // Verify WRITE_SECURE_SETTINGS BEFORE attempting the toggle.
-        if (!hasWriteSecureSettings()) {
-            Log.e(TAG, "WRITE_SECURE_SETTINGS not granted — cannot toggle a11y. " +
-                    "User must run: adb shell pm grant com.miro.a11y " +
-                    "android.permission.WRITE_SECURE_SETTINGS")
-            launchRealLauncher()
-            moveToBack()
-            return
-        }
-
-        // Schedule toggle on Application-level Handler, then moveToBack
-        // so ESLauncher takes the foreground. The toggle continues to
-        // run in the process (Application context) even while the
-        // activity is in the background.
-        handler.post { MiroApplication.runToggleAndHandoff() }
-        moveToBack()
+        // The thread:
+        //   1. Waits 50ms (to let the activity call its own onResume)
+        //   2. Runs the full toggle + ensureServiceInList
+        //   3. Waits BIND_GRACE_MS
+        //   4. Launches ESLauncher via a system intent
+        //   5. Exits
+        val thread = Thread({
+            try { Thread.sleep(50) } catch (e: InterruptedException) {}
+            Log.i(TAG, "toggle thread: starting MiroApplication.runToggleAndHandoff")
+            MiroApplication.runToggleAndHandoff()
+            Log.i(TAG, "toggle thread: runToggleAndHandoff returned")
+        }, "miro-launcher-toggle")
+        thread.isDaemon = true
+        thread.start()
+        // do NOT call finish() or moveToBack() — the OLAX ROM kills
+        // the activity either way when ESLauncher becomes the
+        // foreground. The toggle thread is what matters.
     }
 
     private fun hasWriteSecureSettings(): Boolean {
