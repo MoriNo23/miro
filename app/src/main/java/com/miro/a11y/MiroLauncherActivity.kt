@@ -8,44 +8,40 @@ import android.provider.Settings
 import android.util.Log
 
 /**
- * MiroLauncherActivity — dual-purpose:
+ * MiroLauncherActivity — HOME launcher wrapper that re-enables the
+ * AccessibilityService after every reboot on the OLAX Magic Q1 (no root).
  *
- * 1. LAUNCHER: declares HOME/MAIN/DEFAULT intent-filter so the system launches
- *    it automatically after every boot (the only user-app component Android
- *    starts on its own post-reboot on this OLAX/Allwinner ROM). Plain
- *    BroadcastReceivers, JobScheduler, AlarmManager and WorkManager are all
- *    blocked from firing after boot for non-system apps — but the launcher is
- *    started by the system directly, so it works.
+ * Why this exists: the OLAX/Allwinner ROM blocks BOOT_COMPLETED,
+ * JobScheduler, AlarmManager and WorkManager for user apps after boot.
+ * The ONLY component Android auto-launches post-reboot is a HOME launcher.
  *
- * 2. A11Y RE-ENABLE: after reboot the ROM forces ACCESSIBILITY_ENABLED=0 even
- *    though ENABLED_ACCESSIBILITY_SERVICES still lists miro. We perform the full
- *    toggle (remove miro, disable, wait, re-add miro, enable) which is what
- *    actually forces the service to re-bind, then hand control to the real
- *    launcher (ESLauncher) and hide.
+ * Flow:
+ *   1. System starts this activity (HOME intent).
+ *   2. reenableAccessibility() performs a full a11y toggle WITH 3 retries
+ *      and post-write verification, then launches the real launcher
+ *      (ESLauncher) and finishes.
  *
- * The user's experience is unchanged: ESLauncher shows as usual, but miro's
- * accessibility service is live after every reboot with no manual action.
- *
- * Requires WRITE_SECURE_SETTINGS, granted via:
+ * Requires WRITE_SECURE_SETTINGS (granted once via ADB):
  *   adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS
  */
-open class MiroLauncherActivity : Activity() {
+class MiroLauncherActivity : Activity() {
 
     companion object {
         private const val TAG = "miro"
         private const val SERVICE = "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
-        private const val OTHER_SERVICES =
-            "bitpit.launcher/bitpit.launcher.lock_screen.LockScreenService:" +
-            "io.github.muntashirakon.AppManager/io.github.muntashirakon.AppManager.accessibility.NoRootAccessibilityService"
         private const val REAL_LAUNCHER_PKG = "com.android.launcher3"
         private const val REAL_LAUNCHER_CLS = "com.android.launcher3.ESLauncher"
+
+        // Toggle robustness constants (audit 2026-09-01)
+        private const val A11Y_TOGGLE_DELAY_MS = 2000L
+        private const val VERIFY_DELAY_MS = 500L
+        private const val MAX_RETRIES = 3
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        // Perform the full a11y toggle in a background thread, then hand off.
         Thread {
             reenableAccessibility()
             runOnUiThread {
@@ -55,35 +51,82 @@ open class MiroLauncherActivity : Activity() {
         }.start()
     }
 
+    /**
+     * Toggle de accesibilidad con 3 reintentos + verificación post-escritura.
+     *
+     * Patrón (issue 2 / handoff 2026-08-15):
+     *   while (attempt < MAX_RETRIES) {
+     *       attemptToggle(attempt)  // remove miro → flag 0 (verify) → wait → re-add miro → flag 1 (verify)
+     *       if verified: return
+     *       else retry after 1s
+     *   }
+     *
+     * Issue 4: NO hardcodeamos otros servicios. Leemos la lista actual,
+     * filtramos solo el nuestro, re-escribimos la lista restante.
+     */
     private fun reenableAccessibility() {
-        try {
-            val resolver = contentResolver
-
-            // Step 1: remove miro from enabled services, disable accessibility
-            Settings.Secure.putString(
-                resolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                OTHER_SERVICES
-            )
-            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
-
-            // Step 2: wait for Android to process the removal
-            Thread.sleep(2000)
-
-            // Step 3: re-add miro and re-enable accessibility
-            Settings.Secure.putString(
-                resolver,
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-                "$OTHER_SERVICES:$SERVICE"
-            )
-            Settings.Secure.putInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-
-            Log.i(TAG, "re-bind triggered via launcher toggle")
-        } catch (e: SecurityException) {
-            Log.w(TAG, "cannot write secure settings — WRITE_SECURE_SETTINGS not granted")
-        } catch (e: Exception) {
-            Log.e(TAG, "re-enable failed: ${e.message}")
+        var attempt = 0
+        while (attempt < MAX_RETRIES) {
+            attempt++
+            if (attemptToggle(attempt)) {
+                Log.i(TAG, "a11y toggle verified on attempt $attempt")
+                return
+            }
+            Log.w(TAG, "a11y toggle attempt $attempt/$MAX_RETRIES failed — retrying")
+            Thread.sleep(1000)
         }
+        Log.e(TAG, "a11y toggle failed after $MAX_RETRIES attempts — manual fix needed")
+    }
+
+    /** Single toggle attempt. Returns true if all 3 writes verified correctly. */
+    private fun attemptToggle(attempt: Int): Boolean {
+        val cr = contentResolver
+
+        // Read current list dynamically (issue 4 — no OTHER_SERVICES constant)
+        val current = Settings.Secure.getString(
+            cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: ""
+
+        // Step 1: remove our service (case-insensitive match on the full "pkg/cls")
+        val filtered = current.split(":")
+            .filter { it.trim().lowercase() != SERVICE.lowercase() }
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(":")
+
+        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, filtered)
+        Thread.sleep(VERIFY_DELAY_MS)
+
+        // Step 2: Disable accessibility
+        Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+        Thread.sleep(VERIFY_DELAY_MS)
+        if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 0) {
+            Log.w(TAG, "[$attempt] flag 0 verification failed")
+            return false
+        }
+
+        // Step 3: Wait for the system to process the disable
+        Thread.sleep(A11Y_TOGGLE_DELAY_MS)
+
+        // Step 4: Re-add our service
+        val newList = if (filtered.isEmpty()) SERVICE else "$filtered:$SERVICE"
+        Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newList)
+        Thread.sleep(VERIFY_DELAY_MS)
+        if (Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+                ?.contains(SERVICE, ignoreCase = true) != true) {
+            Log.w(TAG, "[$attempt] re-add verification failed")
+            return false
+        }
+
+        // Step 5: Enable accessibility
+        Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+        Thread.sleep(VERIFY_DELAY_MS)
+        if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 1) {
+            Log.w(TAG, "[$attempt] flag 1 verification failed")
+            return false
+        }
+
+        return true
     }
 
     private fun launchRealLauncher() {

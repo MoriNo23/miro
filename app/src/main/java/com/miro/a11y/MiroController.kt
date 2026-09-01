@@ -148,6 +148,12 @@ class MiroController(private val service: MiroAccessibilityService) {
                         result.put("bounds", JSONArray(listOf(b.left, b.top, b.right, b.bottom)))
                     } else result.put("error", "not found")
                 }
+                "start_wireless_debug" -> {
+                    val ok = service.startWirelessDebug()
+                    result.put("ok", ok)
+                    if (ok) result.put("state", "started")
+                    else result.put("error", "service not ready")
+                }
                 else -> result.put("error", "unknown action: ${cmd.optString("action")}")
             }
         } catch (e: Exception) {
