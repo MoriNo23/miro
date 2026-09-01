@@ -32,11 +32,26 @@ class MiroAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "miro"
         // Auto-trigger the Wireless Debugging flow after the service connects.
-        // OLAX Magic Q1 (build china, Android 12) no permite toggle directo de
-        // Settings.Global.adb_wifi_enabled sin pasar por la UI, así que el
-        // automator hace el path: QS → Settings → Developer Options →
-        // Wireless Debugging → click → extraer IP:Port → enviar al PC.
-        private const val kAutoStartWirelessDebug = true
+        // DISABLED by default (kAutoStartWirelessDebug = false). The click flow
+        // is fragile on the OLAX Magic Q1 (chinese build, Android 12):
+        //   - Step 1 (open QS) sometimes opens the notification shade instead
+        //     of the Quick Settings tiles (depends on swipe target)
+        //   - Step 2 (find 'Settings' in QS) fails when only notifications show
+        //   - If the flow fails halfway, the tablet is left with QS open and
+        //     no way to recover without manual touch
+        //
+        // When the click sequence is made more robust (e.g. by checking for
+        // the right window first, with explicit "open Quick Settings tiles"
+        // via a top-edge swipe rather than GLOBAL_ACTION_QUICK_SETTINGS),
+        // flip this to true.
+        //
+        // For now, after each reboot the user has to:
+        //   1. Wait for the boot + MiroLauncherActivity toggle to finish
+        //   2. Manually open Settings → Developer Options → Wireless Debugging
+        //   3. Toggle it on — the automator (started from the PC socket
+        //      `{"action":"start_wireless_debug"}`) will then do the rest
+        //      of the flow (extract ip:port, send to host)
+        private const val kAutoStartWirelessDebug = false
         private const val AUTO_START_DELAY_MS = 8_000L
     }
 
