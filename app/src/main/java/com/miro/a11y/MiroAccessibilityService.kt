@@ -31,31 +31,8 @@ class MiroAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "miro"
-        // Auto-trigger the Wireless Debugging flow after the service connects.
-        // DISABLED by default (kAutoStartWirelessDebug = false). The click flow
-        // is fragile on the OLAX Magic Q1 (chinese build, Android 12):
-        //   - Step 1 (open QS) sometimes opens the notification shade instead
-        //     of the Quick Settings tiles (depends on swipe target)
-        //   - Step 2 (find 'Settings' in QS) fails when only notifications show
-        //   - If the flow fails halfway, the tablet is left with QS open and
-        //     no way to recover without manual touch
-        //
-        // When the click sequence is made more robust (e.g. by checking for
-        // the right window first, with explicit "open Quick Settings tiles"
-        // via a top-edge swipe rather than GLOBAL_ACTION_QUICK_SETTINGS),
-        // flip this to true.
-        //
-        // For now, after each reboot the user has to:
-        //   1. Wait for the boot + MiroLauncherActivity toggle to finish
-        //   2. Manually open Settings → Developer Options → Wireless Debugging
-        //   3. Toggle it on — the automator (started from the PC socket
-        //      `{"action":"start_wireless_debug"}`) will then do the rest
-        //      of the flow (extract ip:port, send to host)
-        private const val kAutoStartWirelessDebug = false
-        private const val AUTO_START_DELAY_MS = 8_000L
     }
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var controller: MiroController
     private var socketServer: MiroSocketServer? = null
     private var wirelessAutomator: WirelessDebugAutomator? = null
@@ -66,39 +43,24 @@ class MiroAccessibilityService : AccessibilityService() {
 
         controller = MiroController(this)
 
-        // Start embedded control socket (localhost only, no root needed)
+        // Start embedded control socket (localhost only, no root needed).
+        // The socket is the only entry point to start the Wireless Debugging
+        // flow without manual touch, and it requires Wireless Debugging to
+        // be already on (which is a one-time manual step the user does after
+        // each reboot). See vault-miro/01-Fundamentos/01-wireless-adb-historia.md
+        // for the full design rationale.
         if (socketServer == null) {
             socketServer = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
             socketServer?.start()
         }
 
         // State machine for Wireless Debugging onboarding.
-        // Activado por comando de socket: {"action":"start_wireless_debug"}
+        // NOT auto-started on connect. The OLAX ROM makes performGlobalAction
+        // (QUICK_SETTINGS) open the notification shade instead of the Quick
+        // Settings tiles, so an unattended flow gets stuck at the "no
+        // notifications" empty state and the user has to recover manually.
+        // The flow is fired from the socket: {"action":"start_wireless_debug"}.
         wirelessAutomator = WirelessDebugAutomator(this, controller) { msg -> Log.d(TAG, msg) }
-
-        // Auto-trigger: after a delay, start the flow unless Wireless Debugging
-        // is already on (so we don't loop forever). Guarded by kAutoStartWirelessDebug
-        // so the user can opt out without touching code.
-        if (kAutoStartWirelessDebug) {
-            mainHandler.postDelayed({
-                if (isWirelessDebugAlreadyOn()) {
-                    Log.i(TAG, "auto-start skipped: adb_wifi_enabled already 1")
-                    return@postDelayed
-                }
-                Log.i(TAG, "auto-start: triggering wireless debug flow")
-                startWirelessDebug()
-            }, AUTO_START_DELAY_MS)
-        }
-    }
-
-    private fun isWirelessDebugAlreadyOn(): Boolean {
-        return try {
-            android.provider.Settings.Global.getInt(
-                contentResolver, "adb_wifi_enabled"
-            ) == 1
-        } catch (e: Exception) {
-            false
-        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
