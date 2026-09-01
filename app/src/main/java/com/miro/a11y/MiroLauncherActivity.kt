@@ -84,7 +84,7 @@ class MiroLauncherActivity : Activity() {
         // Schedule the work on the main thread (no Thread{} — survives with
         // the activity).
         mainHandler.post {
-            val ok = doToggleOnce(attempt)
+            val ok = attemptToggle(attempt)
             if (ok) {
                 Log.i(TAG, "a11y toggle verified on attempt $attempt")
                 launchRealLauncher()
