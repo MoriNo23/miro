@@ -39,16 +39,15 @@
             </intent-filter>
         </activity>
 
-        <!-- MainActivity: UI for Wireless Debugging setup (btnSetupAdb). -->
+        <!-- MainActivity: UI for Wireless Debugging setup (btnSetupAdb).
+             No LAUNCHER intent-filter: it would create a second icon in
+             the app drawer (the user reported two "miro" entries). The
+             activity is still reachable via `am start -n com.miro.a11y/.ui.MainActivity`
+             from the PC or from the MiroLauncherActivity itself if needed. -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
-            android:theme="@style/Theme.Miro">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+            android:theme="@style/Theme.Miro" />
 
         <!-- MiroAccessibilityService: the actual a11y service. -->
         <service

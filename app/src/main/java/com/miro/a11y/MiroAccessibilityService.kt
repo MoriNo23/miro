@@ -176,22 +176,16 @@ class WirelessDebugAutomator(
         state = State.OPENING_DEV_OPTIONS
         onLog("wireless debug: state=${state.name}")
 
-        // OLAX Magic Q1 path (verified 2026-09-01): the Quick Settings tile
-        // grid already contains a "Depuración inalámbrica" tile that opens
-        // the Wireless Debugging screen directly. No need to navigate via
-        // Settings → Developer Options → Wireless Debugging.
-        //
-        // The stock Android path (Settings → Dev Options → ...) doesn't
-        // work reliably because the OLAX ROM's NotificationShade is a
-        // tile-only view (no Settings gear in the standard position, and
-        // the global action may not open the full Settings app), so the
-        // old step2OpenSettings() / step3OpenDevOptions() flow got stuck.
-        //
-        // Steps:
-        //   1. Open the Quick Settings / NotificationShade
-        //   2. Tap the "Depuración inalámbrica" tile directly
-        //   3. Read the Wireless Debugging screen, extract ip:port
-        //   4. Send to PC
+        // OLAX Magic Q1 path (verified 2026-09-01 with Mori). The full flow:
+        //   1. Open Quick Settings (this is the NotificationShade on OLAX)
+        //   2. Tap the "Depuración inalámbrica" tile
+        //   3. The dialog "¿Permitir la depuración inalámbrica en esta red?" appears
+        //   4. Tap the "Permitir siempre en esta red" checkbox so we don't get
+        //      asked again on subsequent reboots
+        //   5. Tap "PERMITIR"
+        // After that, adb_wifi_enabled is 1 and the PC's adb_tablet script
+        // can find the random port via nmap (no need to extract ip:port
+        // from the tablet — that part is already handled on the PC side).
         val ok = controller.globalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
         if (!ok) {
             onLog("wireless debug: QUICK_SETTINGS failed")
@@ -199,68 +193,56 @@ class WirelessDebugAutomator(
         handler.postDelayed({ step2TapWirelessDebugTile() }, 1500)
     }
 
-    /** Step 2 (OLAX path): tap the "Depuración inalámbrica" tile in QS. */
+    /** Step 2: tap the "Depuración inalámbrica" tile in the QS grid. */
     private fun step2TapWirelessDebugTile() {
         if (!running) return
         state = State.CLICKING_WIRELESS_DEBUG
-        onLog("wireless debug: state=${state.name} — tapping Wireless Debug tile in QS")
+        onLog("wireless debug: state=${state.name} — tapping tile")
 
-        // Match the localized tile label. The dump shows it as
-        // "Depuración inalámbrica" (text) with content-desc same.
         val tileTerms = listOf("Depuración inalámbrica", "Wireless Debugging",
             "Wireless debug", "wireless debugging")
-        var ok = tapByTextMulti(tileTerms, fallback = true)
+        val ok = tapByTextMulti(tileTerms, fallback = false)
         if (!ok) {
-            onLog("wireless debug: tile not found in QS — bailing out")
+            onLog("wireless debug: tile not found in QS")
             stopWithError("wireless debug tile not found in QS")
             return
         }
-        handler.postDelayed({ step3ExtractIpPort() }, 2500)
+        handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
     }
 
-    /** Step 3 (OLAX path): the Wireless Debugging screen is up — read ip:port. */
-    private fun step3ExtractIpPort() {
+    /** Step 3: tap the "Permitir siempre en esta red" checkbox. */
+    private fun step3CheckAlwaysAllow() {
         if (!running) return
-        state = State.EXTRACTING_IP_PORT
-        onLog("wireless debug: state=${state.name} — extracting ip:port from screen")
+        state = State.CLICKING_WIRELESS_DEBUG
+        onLog("wireless debug: state=${state.name} — checking 'Permitir siempre'")
 
-        val parsed = findIpPortInTree(maxAttempts = 5, delayMs = 1000)
-        if (parsed == null) {
-            // If the tile only TOGGLED Wireless Debugging on/off, we may be
-            // back on the QS now. Re-open QS and try again with the
-            // assumption that we need to tap the tile text on the
-            // "Wireless Debugging" detail page (some ROMs show ip:port
-            // only when the toggle has been on for a few seconds).
-            onLog("wireless debug: ip:port not in tree — re-trying after re-open")
-            handler.postDelayed({
-                if (!running) return@postDelayed
-                val ok = controller.globalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
-                if (!ok) onLog("wireless debug: re-open QS failed")
-                handler.postDelayed({
-                    if (!running) return@postDelayed
-                    val tileTerms = listOf("Depuración inalámbrica", "Wireless Debugging")
-                    tapByTextMulti(tileTerms, fallback = true)
-                    handler.postDelayed({
-                        val retry = findIpPortInTree(maxAttempts = 5, delayMs = 1000)
-                        if (retry == null) {
-                            stopWithError("could not extract ip:port after 2 attempts")
-                        } else {
-                            step4SendToHost(retry)
-                        }
-                    }, 2500)
-                }, 1500)
-            }, 1500)
-            return
+        val checkTerms = listOf("Permitir siempre en esta red",
+            "Permitir siempre", "Always allow on this network")
+        val ok = tapByTextMulti(checkTerms, fallback = false)
+        if (!ok) {
+            onLog("wireless debug: 'Permitir siempre' checkbox not found — proceeding without it")
+            // Not fatal: the dialog may have been already accepted before
+            // (e.g. after a previous successful run, Android remembers the
+            // choice for ~24h). Continue to step 4.
         }
-        step4SendToHost(parsed)
+        handler.postDelayed({ step4TapPermitir() }, 1000)
     }
 
-    /** Step 4: send the ip:port to the host via logcat. */
-    private fun step4SendToHost(result: IpPortParser.Result) {
+    /** Step 4: tap the "PERMITIR" button to accept. */
+    private fun step4TapPermitir() {
         if (!running) return
         state = State.SENDING_TO_PC
-        onLog("wireless debug: state=${state.name} — sending ${result.ip}:${result.port} to host")
-        onLog("WIFI_DEBUG_RESULT ${result.ip}:${result.port} port=${result.port}")
+        onLog("wireless debug: state=${state.name} — tapping PERMITIR")
+
+        val permitTerms = listOf("PERMITIR", "Permitir", "ALLOW", "Allow")
+        val ok = tapByTextMulti(permitTerms, fallback = false)
+        if (!ok) {
+            onLog("wireless debug: PERMITIR button not found")
+            stopWithError("PERMITIR button not found")
+            return
+        }
+        // Wireless Debugging is now on. Done.
+        onLog("WIRELESS_DEBUG_ENABLED via OLAX QS-tile flow")
         state = State.DONE
         onLog("wireless debug: DONE")
         stop()
