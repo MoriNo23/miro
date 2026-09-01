@@ -273,14 +273,12 @@ class WirelessDebugAutomator(
     private fun findIpPortInTree(maxAttempts: Int, delayMs: Long): IpPortParser.Result? {
         var attempts = 0
         while (attempts < maxAttempts) {
-            val tree = controller.dumpScreen() ?: run {
-                Thread.sleep(delayMs)
-                attempts++
-                continue
+            val tree = controller.dumpScreen()
+            if (tree != null) {
+                val text = tree.toString()
+                val parsed = IpPortParser.parse(text)
+                if (parsed != null) return parsed
             }
-            val text = tree.toString()
-            val parsed = IpPortParser.parse(text)
-            if (parsed != null) return parsed
             Thread.sleep(delayMs)
             attempts++
         }
