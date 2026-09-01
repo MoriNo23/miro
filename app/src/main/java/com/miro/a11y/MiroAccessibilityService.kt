@@ -37,6 +37,17 @@ class MiroAccessibilityService : AccessibilityService() {
     private var socketServer: MiroSocketServer? = null
     private var wirelessAutomator: WirelessDebugAutomator? = null
 
+    // Auto-trigger the Wireless Debugging flow after the service connects.
+    // Disabled by default (kManualTrigger = true) because the automator's
+    // click sequence is fragile on the OLAX ROM — if it fails halfway, the
+    // user has to disable/re-enable the service manually. Flip to false
+    // (or remove the gate) once on-device verification confirms the flow.
+    companion object {
+        private const val TAG = "miro"
+        private const val kAutoStartWirelessDebug = false
+        private const val AUTO_START_DELAY_MS = 8_000L
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         Log.i(TAG, "miro accessibility service connected")
@@ -52,6 +63,30 @@ class MiroAccessibilityService : AccessibilityService() {
         // State machine for Wireless Debugging onboarding.
         // Activado por comando de socket: {"action":"start_wireless_debug"}
         wirelessAutomator = WirelessDebugAutomator(this, controller) { msg -> Log.d(TAG, msg) }
+
+        // Auto-trigger: after a delay, start the flow unless Wireless Debugging
+        // is already on (so we don't loop forever). Guarded by kAutoStartWirelessDebug
+        // so the user can opt out without touching code.
+        if (kAutoStartWirelessDebug) {
+            handler.postDelayed({
+                if (isWirelessDebugAlreadyOn()) {
+                    Log.i(TAG, "auto-start skipped: adb_wifi_enabled already 1")
+                    return@postDelayed
+                }
+                Log.i(TAG, "auto-start: triggering wireless debug flow after $AUTO_START_DELAY_MS ms")
+                startWirelessDebug()
+            }, AUTO_START_DELAY_MS)
+        }
+    }
+
+    private fun isWirelessDebugAlreadyOn(): Boolean {
+        return try {
+            android.provider.Settings.Global.getInt(
+                contentResolver, "adb_wifi_enabled"
+            ) == 1
+        } catch (e: Exception) {
+            false
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
