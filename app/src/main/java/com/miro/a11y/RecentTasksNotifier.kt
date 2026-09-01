@@ -68,13 +68,16 @@ class RecentTasksNotifier(
      * `RecentsActionActivity` to keep the static-callback path simple.
      */
     fun buildActionPendingIntent(action: String, requestCode: Int): PendingIntent {
-        val targetClass = if (action == ACTION_OPEN_RECENTS) {
-            "com.miro.a11y.RecentsOverviewActivity"
-        } else {
-            "com.miro.a11y.RecentsActionActivity"
-        }
+        // v1.4.22: both "Abrir recientes" and "Cerrar recientes" route
+        // through RecentsActionActivity. The activity then dispatches
+        // to either the static callback (kill-all) or starts
+        // RecentsOverviewActivity (open-recents). We no longer point
+        // the PendingIntent directly at RecentsOverviewActivity
+        // because that activity is exported=false (defense in depth)
+        // and PendingIntents fired from notifications need an
+        // exported target.
         val intent = Intent(action)
-            .setClassName(context, targetClass)
+            .setClassName(context, "com.miro.a11y.RecentsActionActivity")
             .setPackage(context.packageName)
         return PendingIntent.getActivity(
             context, requestCode, intent,

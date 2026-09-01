@@ -67,8 +67,14 @@ class RecentsActionActivity : Activity() {
                     ?: Log.w(TAG, "recents action: kill-all callback not set")
             }
             ACTION_OPEN_RECENTS -> {
-                RecentsActionReceiver.onOpenRecentsCallback?.invoke()
-                    ?: Log.w(TAG, "recents action: open-recents callback not set")
+                // v1.4.22: open our own RecentsOverviewActivity instead
+                // of the stock RecentsActivity (which is throttled /
+                // not exported on OLAX). Same in-process, no security
+                // gate needed (we are already validated above).
+                val overview = Intent(this, RecentsOverviewActivity::class.java)
+                overview.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(overview)
+                Log.i(TAG, "recents action: launched RecentsOverviewActivity")
             }
             else -> Log.w(TAG, "recents action: unknown action=$action")
         }
