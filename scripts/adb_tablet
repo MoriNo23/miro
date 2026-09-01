@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+# adb_tablet — ADB Tablet Connection Manager (USB ↔ WiFi)
+# Wireless debugging usa un puerto ALEATORIO asignado por el sistema al activar
+# "Depuración inalámbrica". miro (AccessibilityService) auto-activa el switch
+# tras boot, así el puerto está disponible sin USB.
+#
+# Estrategia de resolución de puerto (en orden, primera que funcione gana):
+#   1. Ya figura en `adb devices`  → usa ese serial (ip:puerto dinámico) directo.
+#   2. Hay USB conectado          → lee `adb_port` de settings global (puerto real).
+#   3. Sin USB                    → nmap rápido (timeout corto) sobre rango conocido.
+#   4. Fallback                   → connect directo :5555 (compat legacy).
+#
+# Uso:
+#   adb_tablet            Conecta (o desconecta si ya está conectado por WiFi).
+#   adb_tablet --status   Muestra estado de la tablet, servicios, flags (sin conectar).
+#   adb_tablet --setup    Aplica settings persistentes para post-reboot automático.
+#   adb_tablet --auto-start off|on
+#                         Togglea el flag kAutoStartWirelessDebug via socket.
+#   adb_tablet --help
+#   adb_tablet --version
+set -uo pipefail
+
+VERSION="1.2.3"
+WIFI_IP="10.42.1.63"
+# Rango típico de wireless debugging en Android. nmap lo usa solo como fallback.
+SCAN_RANGE="30000-49999"
+# El abstract socket name del service de miro es único por instancia
+# (miro_<pid>_<rand>) — desde v1.4.7. El PC lo descubre via logcat.
+# El fallback "@miro" es para v1.4.6 y anteriores (nombre fijo).
+MIRO_SOCKET_DEFAULT="@miro"
+MIRO_SOCKET_DYNAMIC="@miro_$(adb shell pidof com.miro.a11y 2>/dev/null | tr -d '\r')_"
+# Forward port local para hablarle al service de miro via adb forward.
+MIRO_FORWARD_PORT=7777
+# Package principal de miro.
+MIRO_PKG="com.miro.a11y"
+
+usage() {
+  cat <<EOF
+adb_tablet $VERSION — ADB Tablet Connection Manager (USB ↔ WiFi)
+
+Uso:
+  adb_tablet            Conecta por WiFi (resuelve puerto dinámico).
+                        Si ya está conectado por WiFi, lo DESCONECTA (toggle).
+  adb_tablet --status   Muestra: conexión, accesibilidad, wireless debug,
+                        service bound, flag auto-start, socket forward.
+  adb_tablet --setup    One-time setup: grant WRITE_SECURE_SETTINGS,
+                        set HOME a MiroLauncherActivity (clave para
+                        auto-arranque post-reboot), habilita a11y,
+                        agrega tile a QS, WiFi anti-corte.
+  adb_tablet --recover  Post-reboot recovery: lanza MiroLauncherActivity
+                        para rebindear a11y. Es lo que hay que correr
+                        cada vez que se reinicia la tablet.
+  adb_tablet --auto-start off|on
+                        Togglea el flag de auto-start wireless debug via
+                        socket. Útil cuando no querés abrir QS.
+  adb_tablet --help     Muestra esta ayuda.
+  adb_tablet --version  Versión.
+
+IP tablet: $WIFI_IP
+EOF
+}
+
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && { usage; exit 0; }
+[[ "${1:-}" == "--version" || "${1:-}" == "-v" ]] && { echo "adb_tablet $VERSION"; exit 0; }
+
+# ── Status: reportar todo lo relevante sin reconectar ─────────────────
+cmd_status() {
+  local dev=$(adb devices 2>/dev/null | awk -v ip="$WIFI_IP" 'NR>1 && $1 ~ "^"ip":" && $2=="device"{print $1;exit}')
+  if [[ -z "$dev" ]]; then
+    # Si hay USB conectado, usar ese
+    dev=$(adb devices 2>/dev/null | awk 'NR>1 && /device$/ && !/:5555/ && $1 !~ /^'"$WIFI_IP"':/ {print $1;exit}')
+  fi
+  if [[ -z "$dev" ]]; then
+    echo "✗ Tablet no conectada a ADB."
+    return 1
+  fi
+  echo "═══ adb_tablet status ═══"
+  echo "Device:        $dev"
+  echo "A11y enabled:  $(adb -s "$dev" shell settings get secure accessibility_enabled | tr -d '\r')"
+  echo "A11y services: $(adb -s "$dev" shell settings get secure enabled_accessibility_services | tr -d '\r')"
+  echo "Wireless:      $(adb -s "$dev" shell settings get global adb_wifi_enabled | tr -d '\r')"
+  echo "HOME:          $(adb -s "$dev" shell cmd shortcut get-default-launcher 2>/dev/null | tr -d '\r' | head -1)"
+  local bound=$(adb -s "$dev" shell dumpsys accessibility 2>/dev/null | grep -oE 'Bound services:\{[^}]+\}' | head -1)
+  if [[ "$bound" == *"miro"* ]]; then
+    echo "Service:       ✓ BOUND (miro)"
+  else
+    echo "Service:       ✗ NOT bound"
+  fi
+  # Try to read the auto-start flag via socket
+  if setup_miro_forward "$dev"; then
+    local resp=$(echo '{"action":"get_auto_start"}' | timeout 3 nc 127.0.0.1 "$MIRO_FORWARD_PORT" 2>/dev/null | head -1)
+    if [[ -n "$resp" ]]; then
+      echo "Auto-start:    $(echo "$resp" | python3 -c "import json,sys; d=json.load(sys.stdin); print('ON' if d.get('auto_start') else 'OFF')" 2>/dev/null || echo "$resp")"
+    fi
+  fi
+  # Show the discovered socket name (helps debugging forward issues)
+  local sname=$(discover_miro_socket_name "$dev")
+  echo "Socket fwd:    tcp:$MIRO_FORWARD_PORT → localabstract:$sname"
+}
+
+# ── Setup: configurar todo lo necesario para que reboot sea automático ─
+cmd_setup() {
+  local dev=$(adb devices 2>/dev/null | awk 'NR>1 && /device$/ {print $1;exit}')
+  [[ -z "$dev" ]] && { echo "✗ Conecta la tablet primero (USB)."; return 1; }
+  echo "═══ adb_tablet setup (one-time) ═══"
+  echo "Device: $dev"
+  echo ""
+  echo "→ Grant WRITE_SECURE_SETTINGS a $MIRO_PKG"
+  local grant_ok=0
+  for try in 1 2 3; do
+    adb -s "$dev" shell pm grant "$MIRO_PKG" android.permission.WRITE_SECURE_SETTINGS 2>&1 >/dev/null
+    if adb -s "$dev" shell dumpsys package "$MIRO_PKG" 2>/dev/null \
+        | grep -q "android.permission.WRITE_SECURE_SETTINGS: granted=true"; then
+      echo "  ✓ granted (try $try)"
+      grant_ok=1
+      break
+    fi
+    echo "  ✗ try $try failed, retrying in 1s"
+    sleep 1
+  done
+  if [[ "$grant_ok" -eq 0 ]]; then
+    echo "  ✗ FAILED to grant WRITE_SECURE_SETTINGS after 3 tries."
+    echo "  → Verifica que la app está instalada: adb shell pm list packages | grep miro"
+    return 1
+  fi
+  echo ""
+  # CRITICAL: set MiroLauncherActivity as the default HOME so the
+  # system invokes it after every reboot (the OLAX Magic Q1 has no
+  # BOOT_COMPLETED for user apps, so the only way our toggle a11y
+  # code can run post-boot is via the HOME intent).
+  #
+  # After the toggle, MiroLauncherActivity hands control back to
+  # ESLauncher. ESLauncher is still enabled and present — we are
+  # not disabling it. We only declare Miro as the default HOME.
+  #
+  # This was verified end-to-end in v1.3.5 (handoff
+  # 2026-09-01-end-to-end-reboot-validated.md). The "Select home
+  # app" dialog only appears the first time (when no default is
+  # set). With this set-home-activity call the system remembers
+  # the choice across reboots.
+  echo "→ Set HOME launcher a $MIRO_PKG/.MiroLauncherActivity"
+  adb -s "$dev" shell cmd package set-home-activity "$MIRO_PKG/.MiroLauncherActivity"
+  echo ""
+  echo "→ Habilitar a11y service con AppManager + MiroAccessibilityService"
+  adb -s "$dev" shell settings put secure enabled_accessibility_services \
+    "$MIRO_PKG/.MiroAccessibilityService:io.github.muntashirakon.AppManager/.accessibility.NoRootAccessibilityService"
+  adb -s "$dev" shell settings put secure accessibility_enabled 1
+  echo ""
+  echo "→ Agregar tile de Auto-WirelessDebug a Quick Settings"
+  local current=$(adb -s "$dev" shell settings get secure sysui_qs_tiles | tr -d '\r')
+  if [[ "$current" != *"$MIRO_PKG/.WirelessDebugTileService"* ]]; then
+    adb -s "$dev" shell settings put secure sysui_qs_tiles \
+      "${current},custom($MIRO_PKG/.WirelessDebugTileService)"
+    echo "  ✓ tile agregado"
+  else
+    echo "  ✓ tile ya estaba"
+  fi
+  echo ""
+  echo "→ Ajustar WiFi anti-corte (ahorro batería)"
+  adb -s "$dev" shell settings put global wifi_suspend_optimizations_enabled 0
+  adb -s "$dev" shell settings put global wifi_sleep_policy 0
+  adb -s "$dev" shell settings put global adaptive_connectivity_enabled 0
+  adb -s "$dev" shell settings put secure wifi_wakeup_enabled 0
+  adb -s "$dev" shell settings put global wifi_wakeup_enabled 0
+  echo ""
+  echo "✓ Setup completo. Próximo reboot:"
+  echo "  - MiroLauncherActivity corre como HOME, hace toggle a11y, handoff a ESLauncher."
+  echo "  - Wireless debug se auto-activa (8s post-bind)."
+  echo "  - Si querés deshabilitar el auto-wireless-debug, agregá el tile 'Auto-WirelessDebug' a QS y desactivá."
+}
+
+# ── Recover: lanzar MiroLauncherActivity para rebindear a11y tras reboot ─
+# Tras cada reboot, accessibility_enabled se resetea a 0 (OLAX quirk).
+# ESLauncher es el HOME default (correcto, no se cambia). Este comando
+# lanza MiroLauncherActivity que hace el toggle a11y, espera, y hace
+# handoff a ESLauncher. Es la forma estándar de "reboot recovery".
+cmd_recover() {
+  local dev=$(adb devices 2>/dev/null | awk -v ip="$WIFI_IP" 'NR>1 && $1 ~ "^"ip":" && $2=="device"{print $1;exit}')
+  [[ -z "$dev" ]] && dev=$(adb devices 2>/dev/null | awk 'NR>1 && /device$/ {print $1;exit}')
+  [[ -z "$dev" ]] && { echo "✗ Tablet no conectada."; return 1; }
+  echo "═══ adb_tablet recover (post-reboot) ═══"
+  echo "Device: $dev"
+  echo ""
+  echo "→ Lanzando MiroLauncherActivity (esto re-bindea el a11y service)..."
+  adb -s "$dev" shell am start -n "$MIRO_PKG/.MiroLauncherActivity" 2>&1
+  echo ""
+  echo "→ Esperando 12s a que el toggle complete..."
+  sleep 12
+  echo ""
+  echo "→ Estado post-recover:"
+  cmd_status
+}
+
+# ── Auto-start: toggle via socket ──────────────────────────────────────
+cmd_auto_start() {
+  local action="$1"
+  local dev=$(adb devices 2>/dev/null | awk -v ip="$WIFI_IP" 'NR>1 && $1 ~ "^"ip":" && $2=="device"{print $1;exit}')
+  [[ -z "$dev" ]] && dev=$(adb devices 2>/dev/null | awk 'NR>1 && /device$/ {print $1;exit}')
+  [[ -z "$dev" ]] && { echo "✗ Tablet no conectada."; return 1; }
+  setup_miro_forward "$dev" || { echo "✗ No pude conectar al socket @miro."; return 1; }
+  local enabled
+  case "$action" in
+    on|ON|true|1)   enabled=true ;;
+    off|OFF|false|0) enabled=false ;;
+    *)
+      # Toggle: leer estado actual y flipearlo
+      local current=$(echo '{"action":"get_auto_start"}' | timeout 3 nc 127.0.0.1 "$MIRO_FORWARD_PORT" 2>/dev/null | head -1)
+      if [[ "$current" == *"true"* ]]; then enabled=false; else enabled=true; fi
+      ;;
+  esac
+  local resp=$(echo "{\"action\":\"set_auto_start\",\"enabled\":$enabled}" | timeout 3 nc 127.0.0.1 "$MIRO_FORWARD_PORT" 2>/dev/null | head -1)
+  if [[ -n "$resp" ]]; then
+    local state=$(echo "$resp" | python3 -c "import json,sys; d=json.load(sys.stdin); print('ON' if d.get('auto_start') else 'OFF')" 2>/dev/null || echo "?")
+    echo "✓ Auto-start wireless debug: $state"
+  else
+    echo "✗ Sin respuesta del socket."
+  fi
+}
+
+# ── Helper: descubrir el abstract socket name del service de miro ───────
+# El nombre es único por instancia: miro_<pid>_<rand> (v1.4.7+).
+# Lo descubrimos de 3 formas, en orden:
+#   1. Logcat reciente (búsqueda del tag "miro socket listening on @")
+#   2. Listado de abstract sockets del proceso (cat /proc/<pid>/net/unix)
+#   3. Fallback al nombre legacy "@miro" (v1.4.6 y anteriores)
+discover_miro_socket_name() {
+  local dev="$1"
+  [[ -z "$dev" ]] && { echo "miro"; return; }
+
+  # 1. Logcat — la línea más reciente con "miro socket listening on @..."
+  local name=$(adb -s "$dev" logcat -d -s miro:V 2>/dev/null \
+    | grep -oE "listening on @miro[^\s]*" \
+    | tail -1 \
+    | sed 's/listening on @//')
+  if [[ -n "$name" && "$name" != "miro" ]]; then
+    echo "$name"
+    return
+  fi
+
+  # 2. Cat /proc/<pid>/net/unix (si la abstracción muestra el pid del proceso)
+  local pid=$(adb -s "$dev" shell pidof com.miro.a11y 2>/dev/null | tr -d '\r')
+  if [[ -n "$pid" ]]; then
+    name=$(adb -s "$dev" shell "grep -oE 'miro_${pid}_[0-9A-Fa-f]+' /proc/net/unix 2>/dev/null" 2>/dev/null \
+      | tr -d '\r' \
+      | head -1)
+    if [[ -n "$name" ]]; then
+      echo "$name"
+      return
+    fi
+  fi
+
+  # 3. Fallback al nombre legacy
+  echo "miro"
+}
+
+# ── Helper: configurar adb forward al socket abstracto de miro ─────────
+setup_miro_forward() {
+  local dev="$1"
+  [[ -z "$dev" ]] && return 1
+  local name=$(discover_miro_socket_name "$dev")
+  # Limpiar forwards viejos
+  adb -s "$dev" forward --remove tcp:"$MIRO_FORWARD_PORT" 2>/dev/null
+  if [[ -n "$name" ]]; then
+    adb -s "$dev" forward tcp:"$MIRO_FORWARD_PORT" localabstract:"$name" 2>/dev/null
+    return $?
+  fi
+  return 1
+}
+
+# ── Activar TCP/IP 5555 (puerto estable) tras conectar ──────────────────
+# Una vez conectada la tablet (por el puerto dinámico de wireless debugging
+# o por USB), le decimos a adbd que también escuche en :5555. Así las
+# próximas conexiones usan ese puerto fijo en lugar del aleatorio.
+enable_5555() {
+  local dev="$1"
+  [[ -z "$dev" ]] && return 1
+  echo "Activando adbd en TCP 5555 (puerto estable)..."
+  if ! adb -s "$dev" tcpip 5555 >/dev/null 2>&1; then
+    echo "⚠ 'adb tcpip 5555' no soportado sobre esta conexión (requiere USB la 1ª vez)."
+    return 1
+  fi
+  sleep 2
+  if adb connect "${WIFI_IP}:5555" 2>/dev/null | grep -q "connected"; then
+    echo "✓ Tablet ahora también en ${WIFI_IP}:5555"
+    # Liberamos el puerto dinámico para dejar solo el 5555 estable.
+    if [[ "$dev" != "${WIFI_IP}:5555" ]]; then
+      adb disconnect "$dev" >/dev/null 2>&1
+      echo "✓ Reconectado vía 5555 (puerto dinámico liberado)."
+    fi
+    return 0
+  fi
+  echo "⚠ No se pudo abrir ${WIFI_IP}:5555."
+  return 1
+}
+
+# ── Mantener WiFi activo (anti ahorro de batería) ────────────────────────
+# Algunas tablets tienen una regla que desactiva el WiFi para ahorrar
+# batería, cortando ADB. Forzamos estos ajustes en cada conexión para que
+# el WiFi no se apague solo.
+wifi_keepalive() {
+  local dev="$1"
+  [[ -z "$dev" ]] && return 1
+  echo "Ajustando WiFi anti-corte (ahorro batería)..."
+  adb -s "$dev" shell settings put global wifi_suspend_optimizations_enabled 0 2>/dev/null
+  adb -s "$dev" shell settings put global wifi_sleep_policy 0 2>/dev/null
+  adb -s "$dev" shell settings put global adaptive_connectivity_enabled 0 2>/dev/null
+  adb -s "$dev" shell settings put secure wifi_wakeup_enabled 0 2>/dev/null
+  adb -s "$dev" shell settings put global wifi_wakeup_enabled 0 2>/dev/null
+  echo "✓ WiFi configurado para no apagarse solo."
+}
+
+# ── Dispatch subcomandos ───────────────────────────────────────────────
+[[ "${1:-}" == "--status" ]]    && { cmd_status; exit $?; }
+[[ "${1:-}" == "--setup" ]]     && { cmd_setup; exit $?; }
+[[ "${1:-}" == "--recover" ]]   && { cmd_recover; exit $?; }
+[[ "${1:-}" == "--auto-start" ]] && { cmd_auto_start "${2:-}"; exit $?; }
+
+# ── Toggle: si ya está conectado por WiFi, desconectar ──────────────────
+if adb devices 2>/dev/null | grep -q "${WIFI_IP}:"; then
+  conn=$(adb devices 2>/dev/null | grep "${WIFI_IP}:" | awk '{print $1}' | head -1)
+  echo "Desconectando tablet por WiFi ($conn)..."
+  adb disconnect "$conn" 2>/dev/null
+  exit 0
+fi
+
+# ── Resolución de dispositivos ─────────────────────────────────────────
+# Serial WiFi ya conectado (ip:puerto que adb reporta), si existe.
+wifi_serial=$(adb devices 2>/dev/null | awk -v ip="$WIFI_IP" 'NR>1 && $1 ~ "^" ip ":" && $2=="device" {print $1; exit}')
+# Dispositivo por USB (sin :5555 ni wifi de la tablet).
+usb_device=$(adb devices 2>/dev/null | awk 'NR>1 && /device$/ && !/:5555/ && $1 !~ /^'"$WIFI_IP"':/ {print $1}' | head -1)
+
+connected=0
+
+# ── 1. Ya conectada por WiFi ───────────────────────────────────────────
+if [[ -n "$wifi_serial" ]]; then
+  echo "✓ Tablet ya conectada: $wifi_serial"
+  connected=1
+fi
+
+# ── 2. USB presente → leer adb_port real de settings ──────────────────
+if [[ $connected -eq 0 && -n "$usb_device" ]]; then
+  adb_wifi=$(adb -s "$usb_device" shell settings get global adb_wifi_enabled 2>/dev/null | tr -d '\r ')
+  if [[ "$adb_wifi" == "1" ]]; then
+    wifi_port=$(adb -s "$usb_device" shell settings get global adb_port 2>/dev/null | tr -d '\r ')
+    if [[ -n "$wifi_port" && "$wifi_port" != "null" ]]; then
+      target="${WIFI_IP}:${wifi_port}"
+      echo "Conectando a $target (puerto de settings)..."
+      if adb connect "$target" 2>/dev/null | grep -q "connected"; then
+        connected=1
+      else
+        echo "⚠ connect $target falló (¿puerto obsoleto?). Escaneando..."
+      fi
+    fi
+  else
+    echo "Wireless debugging OFF en USB. Activando TCP/IP 5555..."
+  fi
+fi
+
+# ── 3. nmap fallback (solo si aún no conectada) ────────────────────────
+if [[ $connected -eq 0 ]]; then
+  echo "Escaneando puertos wireless (${SCAN_RANGE}, timeout 20s)..."
+  # -T4 agresivo + rtt corto para no colgarse; --open solo puertos abiertos.
+  # Envuelta en `timeout 20s` para NUNCA bloquear la sesión.
+  ports=$(timeout 20s nmap -Pn -T4 --max-rtt-timeout 500ms --host-timeout 15s \
+          -p "$SCAN_RANGE" --open "$WIFI_IP" 2>/dev/null \
+          | awk '/\/tcp.*open/ {split($1,a,"/"); print a[1]}')
+  if [[ -n "$ports" ]]; then
+    echo "Puertos encontrados: $ports"
+    for port in $ports; do
+      target="${WIFI_IP}:${port}"
+      echo "Intentando $target..."
+      if adb connect "$target" 2>/dev/null | grep -q "connected"; then
+        echo "OK: conectado a $target"
+        connected=1
+        break
+      fi
+    done
+  else
+    echo "No se encontraron puertos abiertos vía nmap."
+  fi
+fi
+
+# ── 4. Fallback legacy :5555 ───────────────────────────────────────────
+if [[ $connected -eq 0 ]]; then
+  echo "Fallback: ${WIFI_IP}:5555..."
+  if [[ -n "$usb_device" ]]; then
+    adb -s "$usb_device" tcpip 5555 >/dev/null 2>&1
+    sleep 2
+  fi
+  if adb connect "${WIFI_IP}:5555" 2>/dev/null | grep -q "connected"; then
+    echo "Fallback OK: ${WIFI_IP}:5555"
+    connected=1
+  fi
+fi
+
+# ── Tras conectar: fijar puerto 5555 + WiFi anti-corte ─────────────────
+if [[ $connected -eq 1 ]]; then
+  serial=$(adb devices 2>/dev/null | awk -v ip="$WIFI_IP" 'NR>1 && $1 ~ "^"ip":" && $2=="device"{print $1;exit}')
+  if [[ -n "$serial" ]]; then
+    enable_5555 "$serial"
+    wifi_keepalive "$serial"
+  fi
+fi
+
+if [[ $connected -eq 0 ]]; then
+  echo "Error: Tablet no detectada. Verifica que wireless debugging esté activo."
+fi
+exit $connected
