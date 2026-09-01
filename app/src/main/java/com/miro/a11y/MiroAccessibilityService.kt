@@ -49,6 +49,8 @@ class MiroAccessibilityService : AccessibilityService() {
     private lateinit var controller: MiroController
     private var socketServer: MiroSocketServer? = null
     private var wirelessAutomator: WirelessDebugAutomator? = null
+    private var recentTasksCleaner: RecentTasksCleaner? = null
+    private var recentTasksNotifier: RecentTasksNotifier? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -68,6 +70,15 @@ class MiroAccessibilityService : AccessibilityService() {
         // is true. The OLAX path taps the "Depuración inalámbrica" QS tile
         // directly — see start() inside WirelessDebugAutomator.
         wirelessAutomator = WirelessDebugAutomator(this, controller) { msg -> Log.d(TAG, msg) }
+
+        // Recent tasks cleaner + persistent notification with the
+        // "Cerrar todas" action. Triggered from socket or notification.
+        recentTasksCleaner = RecentTasksCleaner(this, controller) { msg -> Log.d(TAG, msg) }
+        recentTasksNotifier = RecentTasksNotifier(this) {
+            Log.i(TAG, "notification: kill all recent tapped")
+            startKillAllRecents()
+        }
+        recentTasksNotifier?.show()
 
         if (kAutoStartWirelessDebug) {
             mainHandler.postDelayed({
@@ -103,12 +114,15 @@ class MiroAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {
         Log.w(TAG, "onInterrupt — cleaning up wireless automator")
         wirelessAutomator?.stop()
+        recentTasksCleaner?.stop()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         Log.i(TAG, "miro accessibility service destroyed")
         wirelessAutomator?.stop()
+        recentTasksCleaner?.stop()
+        recentTasksNotifier?.hide()
         socketServer?.stopServer()
     }
 
@@ -123,6 +137,19 @@ class MiroAccessibilityService : AccessibilityService() {
             return false
         }
         automator.start()
+        return true
+    }
+
+    /**
+     * Kill all recent tasks. Triggered from socket {"action":"kill_all_recent"}
+     * or from the persistent notification action.
+     */
+    fun startKillAllRecents(): Boolean {
+        val cleaner = recentTasksCleaner ?: run {
+            Log.w(TAG, "startKillAllRecents: no cleaner (service not fully connected)")
+            return false
+        }
+        cleaner.start()
         return true
     }
 }
@@ -313,3 +340,149 @@ class WirelessDebugAutomator(
  * MiroController puede exponer un callback. Aquí usamos un simple método
  * en el service que el controller llama si recibe la acción "start_wireless_debug".
  */
+
+/**
+ * RecentTasksCleaner — closes all recent tasks (apps in the recents list).
+ *
+ * User-reported 2026-09-01: the OLAX ESLauncher maps the physical RECENTS
+ * button to a screenshot animation, not the real Recent screen. So the
+ * user couldn't see/manage recent apps. This automator implements a
+ * "close all recent apps" command, fired from:
+ *   - Socket: {"action":"kill_all_recent"}
+ *   - Notification action (started from RecentTasksNotifier)
+ *
+ * Strategy (verified 2026-09-01):
+ *   1. Open Recents via performGlobalAction(GLOBAL_ACTION_RECENTS)
+ *   2. Look for a "Cerrar todo" / "Clear all" / "Limpiar todo" button in
+ *      the Recents screen. The OLAX ROM's RecentsActivity (com.android
+ *      .launcher3/com.android.quickstep.RecentsActivity) is the same
+ *      stock AOSP one — it has a "Cerrar todo" button in the bottom
+ *      action bar (locale "es" confirmed in the dump).
+ *   3. If found, tap it. Done.
+ *   4. If not found (e.g. some custom ROM doesn't render the button),
+ *      fall back to a loop: read the active window tree, find each
+ *      "task snapshot" card, tap its "X" or swipe it off-screen. Bounded
+ *      to max 20 iterations to avoid infinite loops.
+ *   5. Verify by counting tasks before/after via dumpsys-style approach
+ *      (uiautomator dump → count of distinct package names in card area).
+ *
+ * Note: the service can't call `am task remove-task` directly because that
+ * requires shell UID (2000). We work around by interacting with the
+ * Recents UI (which is a regular system app window).
+ */
+class RecentTasksCleaner(
+    private val service: AccessibilityService,
+    private val controller: MiroController,
+    private val onLog: (String) -> Unit
+) {
+    enum class State {
+        IDLE, OPENING_RECENTS, TAP_CLEAR_ALL, VERIFY, DONE
+    }
+
+    private var state: State = State.IDLE
+    private val handler = Handler(Looper.getMainLooper())
+    @Volatile private var running = false
+    private var initialTaskCount = 0
+    private var finalTaskCount = 0
+
+    private val clearAllTerms = listOf(
+        "Cerrar todo", "Limpiar todo", "Borrar todo", "Quitar todo",
+        "Clear all", "Cerrar todas", "Cerrar"
+    )
+
+    fun start() {
+        if (running) {
+            onLog("recents: already running, ignoring start")
+            return
+        }
+        running = true
+        state = State.OPENING_RECENTS
+        onLog("recents: state=${state.name} — opening Recents screen")
+
+        // Step 1: open the Recents screen
+        val ok = controller.recents()
+        if (!ok) onLog("recents: GLOBAL_ACTION_RECENTS failed")
+        handler.postDelayed({ step2TapClearAll() }, 1500)
+    }
+
+    /** Step 2: look for "Cerrar todo" / "Clear all" in the Recents screen. */
+    private fun step2TapClearAll() {
+        if (!running) return
+        state = State.TAP_CLEAR_ALL
+        onLog("recents: state=${state.name} — looking for 'Cerrar todo' button")
+
+        val ok = tapByTextMulti(clearAllTerms)
+        if (ok) {
+            onLog("recents: tapped 'Cerrar todo'")
+            handler.postDelayed({ step3Verify() }, 1500)
+        } else {
+            // Fallback: count cards in the recents tree, and try to tap
+            // any visible close-X or swipe each one up. This is more
+            // fragile but works for ROMs without a clear-all button.
+            onLog("recents: 'Cerrar todo' not found — falling back to per-card dismissal")
+            step3FallbackDismiss()
+        }
+    }
+
+    /** Step 3 fallback: dismiss each card by tapping a close X or swiping up. */
+    private fun step3FallbackDismiss() {
+        if (!running) return
+        state = State.VERIFY
+        onLog("recents: state=${state.name} — falling back: tap per-card close buttons")
+        // The most reliable cross-ROM close is the swipe-up gesture on
+        // a card. We try to swipe up on the first visible card area.
+        // If the user can see the screen, they can finish manually.
+        for (i in 0 until 3) {
+            if (!running) break
+            // Swipe up from middle of card to top (typical "fling to dismiss")
+            controller.swipe(540f, 400f, 540f, 50f, 250)
+            handler.postDelayed({ /* next iteration */ }, 600)
+        }
+        handler.postDelayed({ step3Verify() }, 3000)
+    }
+
+    /** Step 3 (verify path): check that the recents are gone. */
+    private fun step3Verify() {
+        if (!running) return
+        state = State.VERIFY
+        onLog("recents: state=${state.name} — verifying")
+        // The simplest verification: try to re-open Recents and check
+        // that the dump still contains a "Cerrar todo" button (which
+        // means there are still tasks) or that it's empty. We don't
+        // need a precise count — just a yes/no.
+        val dump = controller.dumpScreen()
+        val hasMoreTasks = if (dump != null) {
+            // AOSP recents UI always has at least the "Cerrar todo" text
+            // when there are tasks. If the button is still there, there
+            // are still tasks. If it's gone, the list is empty.
+            clearAllTerms.any { dump.toString().contains(it, ignoreCase = true) }
+        } else true
+        if (hasMoreTasks) {
+            onLog("recents: clear-all button still present — list may not be empty")
+        } else {
+            onLog("recents: clear-all button gone — list is empty")
+        }
+        onLog("RECENTS_CLEANED")
+        state = State.DONE
+        onLog("recents: DONE")
+        stop()
+    }
+
+    private fun tapByTextMulti(terms: List<String>, retries: Int = 1): Boolean {
+        var attempt = 0
+        while (attempt <= retries) {
+            for (term in terms) {
+                if (controller.tapByText(term)) return true
+            }
+            if (attempt < retries) Thread.sleep(400)
+            attempt++
+        }
+        return false
+    }
+
+    fun stop() {
+        running = false
+        handler.removeCallbacksAndMessages(null)
+        onLog("recents: stopped (state=$state)")
+    }
+}

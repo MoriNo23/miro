@@ -154,6 +154,12 @@ class MiroController(private val service: MiroAccessibilityService) {
                     if (ok) result.put("state", "started")
                     else result.put("error", "service not ready")
                 }
+                "kill_all_recent" -> {
+                    val ok = service.startKillAllRecents()
+                    result.put("ok", ok)
+                    if (ok) result.put("state", "started")
+                    else result.put("error", "service not ready")
+                }
                 else -> result.put("error", "unknown action: ${cmd.optString("action")}")
             }
         } catch (e: Exception) {
