@@ -94,17 +94,26 @@
              Wireless debug state machine lives inside this class via
              WirelessDebugAutomator (audit 2026-09-01: ONE service only). -->
 
-        <!-- RecentsActionReceiver: receives the two notification actions
-             (open recents, close recents). Declared in the manifest with
-             android:exported="false" so only the system can fire it. -->
-        <receiver
-            android:name=".RecentsActionReceiver"
-            android:exported="false">
+        <!-- RecentsActionActivity (v1.4.21+): destination for the two
+             notification action buttons ("Abrir recientes", "Cerrar
+             recientes"). Replaces the pre-1.4.21 BroadcastReceiver path
+             which was blocked by Android 12's notification trampoline
+             restriction (a receiver cannot start an activity from a
+             notification action). exported=true is required so the
+             PendingIntent can resolve to it. The activity validates
+             the action and the package on every onCreate. -->
+        <activity
+            android:name=".RecentsActionActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
             <intent-filter>
                 <action android:name="com.miro.a11y.KILL_ALL_RECENT" />
                 <action android:name="com.miro.a11y.OPEN_RECENTS" />
             </intent-filter>
-        </receiver>
+        </activity>
 
     </application>
 

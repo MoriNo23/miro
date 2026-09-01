@@ -52,12 +52,22 @@ class RecentTasksNotifier(
 
     /**
      * Build the PendingIntent for the notification action button.
-     * Required static so RecentsActionReceiver can resolve it without
-     * depending on the notifier instance.
+     *
+     * Pre-1.4.21 design used `PendingIntent.getBroadcast` pointing at
+     * `RecentsActionReceiver`. This is a notification trampoline on
+     * Android 12+: the system silently blocks the transition from the
+     * receiver into the AccessibilityService. The fix is to point the
+     * PendingIntent directly at the (exported) `RecentsActionActivity`
+     * — an Activity is a valid final destination, not a trampoline.
      */
     fun buildActionPendingIntent(action: String, requestCode: Int): PendingIntent {
-        val intent = Intent(action).setPackage(context.packageName)
-        return PendingIntent.getBroadcast(
+        val intent = Intent(action)
+            .setClassName(context, "com.miro.a11y.RecentsActionActivity")
+            // The action string ("com.miro.a11y.KILL_ALL_RECENT") is also
+            // the package-scoped identifier; we still set package so the
+            // activity gate in onCreate is consistent.
+            .setPackage(context.packageName)
+        return PendingIntent.getActivity(
             context, requestCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
