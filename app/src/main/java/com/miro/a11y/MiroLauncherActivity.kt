@@ -29,7 +29,7 @@ import android.util.Log
  * Requires WRITE_SECURE_SETTINGS, granted via:
  *   adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS
  */
-class MiroLauncherActivity : Activity() {
+open class MiroLauncherActivity : Activity() {
 
     companion object {
         private const val TAG = "miro"
