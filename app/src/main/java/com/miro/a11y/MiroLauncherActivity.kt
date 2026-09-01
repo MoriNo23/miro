@@ -18,39 +18,38 @@ import android.util.Log
  * JobScheduler, AlarmManager and WorkManager for user apps after boot.
  * The ONLY component Android auto-launches post-reboot is a HOME launcher.
  *
- * Flow (v1.4.18 — hybrid):
+ * Flow (v1.4.19 — v1.3.5 pattern restored after Mori correction):
  *   1. System starts this activity as HOME wrapper.
- *   2. onCreate() checks WRITE_SECURE_SETTINGS. If missing, log + finish.
- *   3. onCreate() schedules the toggle on a daemon Thread that calls
- *      MiroApplication.runToggleAndHandoff().
- *   4. The thread does:
- *      a) ensureServiceInList (re-adds MiroAccessibilityService to list)
+ *   2. onCreate() schedules the toggle on the activity's mainHandler
+ *      (NOT on a separate Thread, NOT in MiroApplication). The toggle
+ *      MUST run while the activity is in 'resumed' state as launcher
+ *      — that is the signal to AccessibilityManagerService that
+ *      our service should be bound.
+ *   3. attemptToggle() runs in the activity's main thread:
+ *      a) ensureServiceInList() — re-add MiroAccessibilityService to list
  *      b) Toggle ACCESSIBILITY_ENABLED 0→1 (3 retries)
- *      c) Wait BIND_GRACE_MS = 5s
- *      d) Launch ESLauncher via Application context
- *   5. The activity does NOT call finish() — letting the activity die
- *      too early prevents the system from binding the service.
- *   6. The activity is held in "resumed" state by ESLauncher taking
- *      foreground after step 4d.
+ *      c) Verify the flag stuck
+ *   4. After toggle verified, postDelayed(BIND_GRACE_MS) on mainHandler
+ *      to give AccessibilityManagerService time to bind our service.
+ *   5. After BIND_GRACE_MS, launch ESLauncher + moveTaskToBack(false).
+ *      The activity is moved to background but the process stays
+ *      alive so the service keeps running.
  *
- * Why not MiroApplication.runToggleAndHandoff from Application.onCreate?
- *   The Application.onCreate runs in main thread. The toggle needs
- *   ~3s of Thread.sleep, which would block the main thread and cause
- *   ANR. A daemon Thread is the right approach.
+ * Why the toggle must run on the activity's mainHandler (Mori 2026-09-01):
+ *   "obvio que no lo va a bindear depende de que miro tenga permisos
+ *    de launcher lo bindeé y luego cambie a launcher que estaba, asi
+ *    es la unica forma que lo binde correctamente"
+ *   The AccessibilityManagerService binds the service ONLY when the
+ *   package is in the 'resumed' state as a HOME launcher. Running the
+ *   toggle in a separate Thread (v1.4.14-18 attempts) makes the
+ *   system think the package is not the launcher, and the bind
+ *   doesn't happen. Bound services:{} stays empty.
  *
- * Why not Theme.NoDisplay?
- *   Tested in v1.4.14: OLAX kills the process when NoDisplay activity
- *   is finished. The toggle Thread never gets to run.
- *
- * Why not moveToBack?
- *   Tested in v1.4.15/16: OLAX also kills the process on moveToBack
- *   because the HOME intent fires "displayed" event. The activity
- *   gets a "pause timeout" warning and the system considers the
- *   wrapper dead.
- *
- * Lesson learned: OLAX's "activity timeout" behavior means the activity
- * MUST stay in "resumed" state until ESLauncher takes foreground. The
- * toggle Thread is the unit of work; the activity is just the trigger.
+ * Why we accept the "pantalla oscura" (dark screen) for ~8s:
+ *   The activity is visible during the toggle + BIND_GRACE_MS. This
+ *   is REQUIRED for the bind to happen. The "dark screen" is the
+ *   visual signal that the wrapper is working. v1.3.5 worked this
+ *   way and the user accepted it.
  *
  * Requires WRITE_SECURE_SETTINGS (granted once via ADB):
  *   adb shell pm grant com.miro.a11y android.permission.WRITE_SECURE_SETTINGS
@@ -63,6 +62,8 @@ class MiroLauncherActivity : Activity() {
         private const val REAL_LAUNCHER_CLS = "com.android.launcher3.ESLauncher"
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
@@ -72,32 +73,113 @@ class MiroLauncherActivity : Activity() {
             Log.e(TAG, "WRITE_SECURE_SETTINGS not granted — cannot toggle a11y. " +
                     "User must run: adb shell pm grant com.miro.a11y " +
                     "android.permission.WRITE_SECURE_SETTINGS")
-            // Finish immediately to avoid the "screen oscura" issue.
-            // The service won't auto-bind, but the user is not stuck.
+            // Fall back: launch the real launcher so the user is not stuck
+            // on a black screen. The service will stay unbound until the
+            // permission is granted and the tablet is rebooted again.
             launchRealLauncher()
-            finish()
+            moveToBack()
             return
         }
 
-        // v1.4.18: Run the toggle on a daemon Thread so it survives
-        // any activity lifecycle issues. The activity does NOT finish()
-        // or moveToBack() — we want the activity to stay alive until
-        // ESLauncher takes the foreground, because OLAX's activity
-        // timeout behavior otherwise kills the process before the
-        // AccessibilityManagerService can bind our service.
-        val thread = Thread({
-            try { Thread.sleep(100) } catch (e: InterruptedException) {}
-            Log.i(TAG, "toggle thread: starting MiroApplication.runToggleAndHandoff")
-            MiroApplication.runToggleAndHandoff()
-            Log.i(TAG, "toggle thread: runToggleAndHandoff returned")
-        }, "miro-launcher-toggle")
-        thread.isDaemon = true
-        thread.start()
+        // Run the toggle on the activity's mainHandler. The activity
+        // must stay in 'resumed' state while the toggle runs so
+        // AccessibilityManagerService binds MiroAccessibilityService.
+        mainHandler.post {
+            val ok = runToggleSequence(attempt = 1)
+            if (ok) {
+                Log.i(TAG, "a11y toggle verified — waiting ${MiroApplication.BIND_GRACE_MS}ms for bind")
+                mainHandler.postDelayed({
+                    Log.i(TAG, "BIND_GRACE_MS elapsed — launching real launcher")
+                    launchRealLauncher()
+                    // moveToBack: activity becomes invisible (ESLauncher
+                    // takes foreground) but the process keeps running
+                    // so the service stays bound.
+                    moveToBack()
+                }, MiroApplication.BIND_GRACE_MS)
+            } else {
+                Log.e(TAG, "a11y toggle failed after all attempts — launching real launcher anyway")
+                launchRealLauncher()
+                moveToBack()
+            }
+        }
     }
 
-    private fun hasWriteSecureSettings(): Boolean {
-        return checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
-                PackageManager.PERMISSION_GRANTED
+    /**
+     * Toggle de accesibilidad con 3 reintentos + verificación.
+     * Runs in the activity's mainHandler (Mori correction 2026-09-01).
+     */
+    private fun runToggleSequence(attempt: Int): Boolean {
+        if (attempt > MiroApplication.MAX_RETRIES) {
+            Log.e(TAG, "a11y toggle failed after ${MiroApplication.MAX_RETRIES} attempts")
+            return false
+        }
+        Log.i(TAG, "toggle attempt $attempt starting")
+        val ok = attemptToggle(attempt)
+        if (ok) {
+            Log.i(TAG, "a11y toggle verified on attempt $attempt")
+            return true
+        }
+        Log.w(TAG, "a11y toggle attempt $attempt/${MiroApplication.MAX_RETRIES} failed — retrying in 1.5s")
+        // Recursive retry via mainHandler.postDelayed
+        val retryHandler = Handler(Looper.getMainLooper())
+        retryHandler.postDelayed({ runToggleSequence(attempt + 1) }, 1500L)
+        return false
+    }
+
+    private fun attemptToggle(attempt: Int): Boolean {
+        val cr = contentResolver
+
+        // v1.4.15: Re-ensure MiroAccessibilityService is in the list
+        // before every toggle attempt (defensive against OLAX's
+        // tendency to silently drop entries).
+        try {
+            MiroApplication.ensureServiceInListStatic(cr)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "[$attempt] ensureServiceInList failed: ${e.message}")
+            return false
+        }
+
+        try {
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "[$attempt] putInt flag=0 failed: ${e.message}")
+            return false
+        }
+        try { Thread.sleep(MiroApplication.VERIFY_DELAY_MS) } catch (e: InterruptedException) { return false }
+        if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 0) {
+            Log.w(TAG, "[$attempt] flag 0 verification failed")
+            return false
+        }
+
+        try { Thread.sleep(MiroApplication.A11Y_TOGGLE_DELAY_MS) } catch (e: InterruptedException) { return false }
+
+        try {
+            Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "[$attempt] putInt flag=1 failed: ${e.message}")
+            return false
+        }
+        try { Thread.sleep(MiroApplication.VERIFY_DELAY_MS) } catch (e: InterruptedException) { return false }
+        if (Settings.Secure.getInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, -1) != 1) {
+            Log.w(TAG, "[$attempt] flag 1 verification failed")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Move the activity to background without killing the process.
+     * finish() would evict the process from the activity stack and
+     * unbind the AccessibilityService. moveTaskToBack(false) keeps
+     * the process alive so the service keeps running.
+     */
+    private fun moveToBack() {
+        try {
+            moveTaskToBack(false)
+            Log.i(TAG, "moved to back — process stays alive, service stays bound")
+        } catch (e: Exception) {
+            Log.e(TAG, "moveTaskToBack failed: ${e.message}")
+        }
     }
 
     private fun launchRealLauncher() {
@@ -121,5 +203,10 @@ class MiroLauncherActivity : Activity() {
                 Log.e(TAG, "fallback home launch failed: ${e2.message}")
             }
         }
+    }
+
+    private fun hasWriteSecureSettings(): Boolean {
+        return checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                PackageManager.PERMISSION_GRANTED
     }
 }
