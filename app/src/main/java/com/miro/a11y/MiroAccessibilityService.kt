@@ -31,8 +31,21 @@ class MiroAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "miro"
+        // Auto-trigger the Wireless Debugging flow after the service connects.
+        // OLAX Magic Q1 path (verified 2026-09-01 via uiautomator dump): the
+        // Quick Settings tile grid contains a "Depuración inalámbrica" tile
+        // that opens the Wireless Debugging screen directly. The automator
+        // taps that tile and reads the ip:port — no need to navigate via
+        // Settings → Developer Options → Wireless Debugging.
+        //
+        // The flow runs 8s after onServiceConnected() so the user can see
+        // the QS open and (if needed) intervene. It is a no-op if
+        // adb_wifi_enabled is already 1.
+        private const val kAutoStartWirelessDebug = true
+        private const val AUTO_START_DELAY_MS = 8_000L
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var controller: MiroController
     private var socketServer: MiroSocketServer? = null
     private var wirelessAutomator: WirelessDebugAutomator? = null
@@ -43,24 +56,39 @@ class MiroAccessibilityService : AccessibilityService() {
 
         controller = MiroController(this)
 
-        // Start embedded control socket (localhost only, no root needed).
-        // The socket is the only entry point to start the Wireless Debugging
-        // flow without manual touch, and it requires Wireless Debugging to
-        // be already on (which is a one-time manual step the user does after
-        // each reboot). See vault-miro/01-Fundamentos/01-wireless-adb-historia.md
-        // for the full design rationale.
+        // Start embedded control socket (localhost only, no root needed)
         if (socketServer == null) {
             socketServer = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
             socketServer?.start()
         }
 
         // State machine for Wireless Debugging onboarding.
-        // NOT auto-started on connect. The OLAX ROM makes performGlobalAction
-        // (QUICK_SETTINGS) open the notification shade instead of the Quick
-        // Settings tiles, so an unattended flow gets stuck at the "no
-        // notifications" empty state and the user has to recover manually.
-        // The flow is fired from the socket: {"action":"start_wireless_debug"}.
+        // Triggered either by socket command {"action":"start_wireless_debug"}
+        // or auto-triggered post-connect (8s delay) when kAutoStartWirelessDebug
+        // is true. The OLAX path taps the "Depuración inalámbrica" QS tile
+        // directly — see start() inside WirelessDebugAutomator.
         wirelessAutomator = WirelessDebugAutomator(this, controller) { msg -> Log.d(TAG, msg) }
+
+        if (kAutoStartWirelessDebug) {
+            mainHandler.postDelayed({
+                if (isWirelessDebugAlreadyOn()) {
+                    Log.i(TAG, "auto-start skipped: adb_wifi_enabled already 1")
+                    return@postDelayed
+                }
+                Log.i(TAG, "auto-start: triggering OLAX QS-tile wireless debug flow")
+                startWirelessDebug()
+            }, AUTO_START_DELAY_MS)
+        }
+    }
+
+    private fun isWirelessDebugAlreadyOn(): Boolean {
+        return try {
+            android.provider.Settings.Global.getInt(
+                contentResolver, "adb_wifi_enabled"
+            ) == 1
+        } catch (e: Exception) {
+            false
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -148,103 +176,91 @@ class WirelessDebugAutomator(
         state = State.OPENING_DEV_OPTIONS
         onLog("wireless debug: state=${state.name}")
 
-        // Step 1: open Quick Settings
+        // OLAX Magic Q1 path (verified 2026-09-01): the Quick Settings tile
+        // grid already contains a "Depuración inalámbrica" tile that opens
+        // the Wireless Debugging screen directly. No need to navigate via
+        // Settings → Developer Options → Wireless Debugging.
+        //
+        // The stock Android path (Settings → Dev Options → ...) doesn't
+        // work reliably because the OLAX ROM's NotificationShade is a
+        // tile-only view (no Settings gear in the standard position, and
+        // the global action may not open the full Settings app), so the
+        // old step2OpenSettings() / step3OpenDevOptions() flow got stuck.
+        //
+        // Steps:
+        //   1. Open the Quick Settings / NotificationShade
+        //   2. Tap the "Depuración inalámbrica" tile directly
+        //   3. Read the Wireless Debugging screen, extract ip:port
+        //   4. Send to PC
         val ok = controller.globalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
         if (!ok) {
             onLog("wireless debug: QUICK_SETTINGS failed")
         }
-        handler.postDelayed({ step2OpenSettings() }, 2000)
+        handler.postDelayed({ step2TapWirelessDebugTile() }, 1500)
     }
 
-    /** Step 2: click "Settings" in Quick Settings tile grid → opens system Settings. */
-    private fun step2OpenSettings() {
-        if (!running) return
-        state = State.OPENING_DEV_OPTIONS
-        onLog("wireless debug: state=${state.name} — clicking Settings")
-        var ok = tapByTextMulti(settingsTerms, fallback = true)
-        if (!ok) {
-            onLog("wireless debug: could not find 'Settings' text — tapping QS gear icon @ (480,160)")
-            // The gear icon in Quick Settings (OLAX tablet 1024x600) sits near the
-            // top-right of the QS tile grid. Tap coordinates as last resort.
-            ok = controller.tap(480f, 160f)
-            if (!ok) {
-                onLog("wireless debug: QS gear tap failed — will still proceed")
-            }
-        }
-        handler.postDelayed({ step3OpenDevOptions() }, 2000)
-    }
-
-    /** Step 3: navigate to Developer Options. */
-    private fun step3OpenDevOptions() {
+    /** Step 2 (OLAX path): tap the "Depuración inalámbrica" tile in QS. */
+    private fun step2TapWirelessDebugTile() {
         if (!running) return
         state = State.CLICKING_WIRELESS_DEBUG
-        onLog("wireless debug: state=${state.name} — navigating to Developer Options")
-        val ok = tapByTextMulti(devOptionsTerms)
+        onLog("wireless debug: state=${state.name} — tapping Wireless Debug tile in QS")
+
+        // Match the localized tile label. The dump shows it as
+        // "Depuración inalámbrica" (text) with content-desc same.
+        val tileTerms = listOf("Depuración inalámbrica", "Wireless Debugging",
+            "Wireless debug", "wireless debugging")
+        var ok = tapByTextMulti(tileTerms, fallback = true)
         if (!ok) {
-            onLog("wireless debug: 'Developer options' not found — trying scroll + retry")
-            // Scroll attempt via swipe down then retry once.
-            controller.swipe(540f, 1600f, 540f, 400f, 800)
-            handler.postDelayed({
-                if (tapByTextMulti(devOptionsTerms)) {
-                    step4EnterWirelessDebug()
-                } else {
-                    onError("Developer Options not found")
-                }
-            }, 1500)
+            onLog("wireless debug: tile not found in QS — bailing out")
+            stopWithError("wireless debug tile not found in QS")
             return
         }
-        step4EnterWirelessDebug()
+        handler.postDelayed({ step3ExtractIpPort() }, 2500)
     }
 
-    /** Step 4: ensure "Wireless Debugging" entry is visible (scroll if needed). */
-    private fun step4EnterWirelessDebug() {
-        if (!running) return
-        state = State.CLICKING_WIRELESS_DEBUG
-        onLog("wireless debug: state=${state.name} — looking for Wireless Debugging")
-        val ok = tapByTextMulti(wirelessDebugTerms)
-        if (!ok) {
-            onLog("wireless debug: 'Wireless Debugging' not found — scrolling and retrying")
-            controller.swipe(540f, 1600f, 540f, 400f, 800)
-            handler.postDelayed({
-                if (tapByTextMulti(wirelessDebugTerms, retries = 3, delayMs = 600)) {
-                    step5ExtractIpPort()
-                } else {
-                    onError("Wireless Debugging entry not found")
-                }
-            }, 1800)
-            return
-        }
-        step5ExtractIpPort()
-    }
-
-    /** Step 5: on the Wireless Debugging screen, a dialog or toast shows ip:port. */
-    private fun step5ExtractIpPort() {
+    /** Step 3 (OLAX path): the Wireless Debugging screen is up — read ip:port. */
+    private fun step3ExtractIpPort() {
         if (!running) return
         state = State.EXTRACTING_IP_PORT
         onLog("wireless debug: state=${state.name} — extracting ip:port from screen")
 
-        // Read the active window tree and search for a text matching IP:port.
         val parsed = findIpPortInTree(maxAttempts = 5, delayMs = 1000)
         if (parsed == null) {
-            onError("could not extract ip:port from Wireless Debugging screen")
+            // If the tile only TOGGLED Wireless Debugging on/off, we may be
+            // back on the QS now. Re-open QS and try again with the
+            // assumption that we need to tap the tile text on the
+            // "Wireless Debugging" detail page (some ROMs show ip:port
+            // only when the toggle has been on for a few seconds).
+            onLog("wireless debug: ip:port not in tree — re-trying after re-open")
+            handler.postDelayed({
+                if (!running) return@postDelayed
+                val ok = controller.globalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
+                if (!ok) onLog("wireless debug: re-open QS failed")
+                handler.postDelayed({
+                    if (!running) return@postDelayed
+                    val tileTerms = listOf("Depuración inalámbrica", "Wireless Debugging")
+                    tapByTextMulti(tileTerms, fallback = true)
+                    handler.postDelayed({
+                        val retry = findIpPortInTree(maxAttempts = 5, delayMs = 1000)
+                        if (retry == null) {
+                            stopWithError("could not extract ip:port after 2 attempts")
+                        } else {
+                            step4SendToHost(retry)
+                        }
+                    }, 2500)
+                }, 1500)
+            }, 1500)
             return
         }
-        onLog("wireless debug: extracted ${parsed.ip}:${parsed.port}")
-        step6SendToHost(parsed)
+        step4SendToHost(parsed)
     }
 
-    /** Step 6: send the ip:port to the PC via the @miro socket + log it. */
-    private fun step6SendToHost(result: IpPortParser.Result) {
+    /** Step 4: send the ip:port to the host via logcat. */
+    private fun step4SendToHost(result: IpPortParser.Result) {
         if (!running) return
         state = State.SENDING_TO_PC
         onLog("wireless debug: state=${state.name} — sending ${result.ip}:${result.port} to host")
-
-        // The host reads this via the @miro socket. We log it structured so
-        // the host (or logcat tail) can pick it up. The JSON protocol accepts
-        // a "wireless_debug" action — reusamos el socket de MiroSocketServer
-        // indirectamente: el host corre `adb forward` y parsea logcat.
         onLog("WIFI_DEBUG_RESULT ${result.ip}:${result.port} port=${result.port}")
-
         state = State.DONE
         onLog("wireless debug: DONE")
         stop()
@@ -255,20 +271,17 @@ class WirelessDebugAutomator(
      * Re-reads the tree every [delayMs] up to [maxAttempts].
      */
     private fun findIpPortInTree(maxAttempts: Int, delayMs: Long): IpPortParser.Result? {
-        val dump = controller.dumpScreen() ?: return null
-        val text = dump.toString()
-        val parsed = IpPortParser.parse(text)
-        if (parsed != null) return parsed
-
-        if (maxAttempts <= 1) return null
-        handler.postDelayed({ /* retry handled by caller pattern */ }, delayMs)
-        // Synchronous retry loop (bounded)
-        var attempts = 1
+        var attempts = 0
         while (attempts < maxAttempts) {
+            val tree = controller.dumpScreen() ?: run {
+                Thread.sleep(delayMs)
+                attempts++
+                continue
+            }
+            val text = tree.toString()
+            val parsed = IpPortParser.parse(text)
+            if (parsed != null) return parsed
             Thread.sleep(delayMs)
-            val tree = controller.dumpScreen() ?: break
-            val p = IpPortParser.parse(tree.toString())
-            if (p != null) return p
             attempts++
         }
         return null
@@ -296,6 +309,12 @@ class WirelessDebugAutomator(
     }
 
     private fun onError(msg: String) {
+        onLog("wireless debug ERROR: $msg")
+        state = State.IDLE
+        stop()
+    }
+
+    private fun stopWithError(msg: String) {
         onLog("wireless debug ERROR: $msg")
         state = State.IDLE
         stop()

@@ -11,8 +11,8 @@ android {
         applicationId = "com.miro.a11y"
         minSdk = 31
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.1.3"
+        versionCode = 6
+        versionName = "1.2.0"
 
         // Target OLAX Magic Q1: ARMv7 32-bit + arm64 for compatibility
         ndk {
