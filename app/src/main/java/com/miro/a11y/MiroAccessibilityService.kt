@@ -69,9 +69,40 @@ class MiroAccessibilityService : AccessibilityService() {
         // service gets destroyed and re-created, and the abstract
         // socket name is still held by the previous process until
         // GC releases it).
-        MiroSocketServer.closeExisting()
-        socketServer = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
-        socketServer?.start()
+        //
+        // We retry up to 5 times with exponential backoff because the
+        // OLAX kernel is slow to release the abstract name after a
+        // re-bind (especially right after onUnbind, the kernel needs
+        // more than the 500ms in closeExisting() to fully release).
+        // We do this on a background thread so the main thread is
+        // not blocked.
+        Thread {
+            MiroSocketServer.closeExisting()
+            var attempt = 0
+            val maxAttempts = 5
+            var backoffMs = 200L
+            while (attempt < maxAttempts) {
+                attempt++
+                try {
+                    val s = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
+                    s.start()
+                    // Give the server thread a moment to actually open
+                    // the socket. We can't know if it succeeded without
+                    // a callback, but LocalServerSocket's bind is
+                    // synchronous — if it threw, the thread would die
+                    // and we'd see the error in logcat.
+                    Thread.sleep(100)
+                    socketServer = s
+                    Log.i(TAG, "miro socket ready (attempt $attempt)")
+                    return@Thread
+                } catch (e: Exception) {
+                    Log.w(TAG, "miro socket attempt $attempt/$maxAttempts failed: ${e.message} — backing off ${backoffMs}ms")
+                    try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
+                    backoffMs *= 2
+                }
+            }
+            Log.e(TAG, "miro socket failed after $maxAttempts attempts — PC control disabled")
+        }.start()
 
         // State machine for Wireless Debugging onboarding.
         // Triggered either by socket command {"action":"start_wireless_debug"}
