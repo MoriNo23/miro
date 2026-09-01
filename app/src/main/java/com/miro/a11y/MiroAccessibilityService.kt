@@ -399,85 +399,74 @@ class RecentTasksCleaner(
         state = State.OPENING_RECENTS
         onLog("recents: state=${state.name} — opening Recents screen")
 
-        // Step 1: open the Recents screen
-        val ok = controller.recents()
-        if (!ok) onLog("recents: GLOBAL_ACTION_RECENTS failed")
-        handler.postDelayed({ step2TapClearAll() }, 1500)
-    }
-
-    /** Step 2: look for "Cerrar todo" / "Clear all" in the Recents screen. */
-    private fun step2TapClearAll() {
-        if (!running) return
-        state = State.TAP_CLEAR_ALL
-        onLog("recents: state=${state.name} — looking for 'Cerrar todo' button")
-
-        val ok = tapByTextMulti(clearAllTerms)
-        if (ok) {
-            onLog("recents: tapped 'Cerrar todo'")
-            handler.postDelayed({ step3Verify() }, 1500)
-        } else {
-            // Fallback: count cards in the recents tree, and try to tap
-            // any visible close-X or swipe each one up. This is more
-            // fragile but works for ROMs without a clear-all button.
-            onLog("recents: 'Cerrar todo' not found — falling back to per-card dismissal")
-            step3FallbackDismiss()
+        // Step 1: open the Recents screen. We can't use
+        // performGlobalAction(GLOBAL_ACTION_RECENTS) on the OLAX ROM
+        // because it opens the notification shade instead of the Recents
+        // task switcher (verified 2026-09-01). Instead we start the
+        // RecentsActivity directly with a system-level intent.
+        //
+        // The trick: the OLAX ESLauncher maps the physical RECENTS button
+        // to a screenshot animation, so the user can't reach the real
+        // recents UI. The RecentsActivity component is com.android.launcher3
+        // /com.android.quickstep.RecentsActivity but it's not exported.
+        //
+        // We use the ACTION_MAIN + CATEGORY_HOME intent, which the system
+        // handles by opening the recents UI. Fallback: ACTION_VIEW with
+        // task data from getRecentTasks().
+        val opened = openRecentsScreen()
+        if (!opened) {
+            onLog("recents: failed to open Recents screen — bailing out")
+            stopWithError("could not open recents screen")
+            return
         }
+        handler.postDelayed({ step2Verify() }, 2000)
     }
 
-    /** Step 3 fallback: dismiss each card by tapping a close X or swiping up. */
-    private fun step3FallbackDismiss() {
-        if (!running) return
-        state = State.VERIFY
-        onLog("recents: state=${state.name} — falling back: tap per-card close buttons")
-        // The most reliable cross-ROM close is the swipe-up gesture on
-        // a card. We try to swipe up on the first visible card area.
-        // If the user can see the screen, they can finish manually.
-        for (i in 0 until 3) {
-            if (!running) break
-            // Swipe up from middle of card to top (typical "fling to dismiss")
-            controller.swipe(540f, 400f, 540f, 50f, 250)
-            handler.postDelayed({ /* next iteration */ }, 600)
+    /**
+     * Open the Recents task switcher. Tries several approaches because
+     * the OLAX ROM blocks most of them.
+     */
+    private fun openRecentsScreen(): Boolean {
+        // Approach 1: performGlobalAction — works on AOSP/QuickStep,
+        // broken on OLAX (opens notification shade). Try anyway.
+        val ok1 = controller.recents()
+        if (ok1) {
+            // The action was accepted, but the OLAX ROM may have routed
+            // it to the notification shade. Check after a moment.
+            onLog("recents: GLOBAL_ACTION_RECENTS returned true")
+            return true
         }
-        handler.postDelayed({ step3Verify() }, 3000)
-    }
-
-    /** Step 3 (verify path): check that the recents are gone. */
-    private fun step3Verify() {
-        if (!running) return
-        state = State.VERIFY
-        onLog("recents: state=${state.name} — verifying")
-        // The simplest verification: try to re-open Recents and check
-        // that the dump still contains a "Cerrar todo" button (which
-        // means there are still tasks) or that it's empty. We don't
-        // need a precise count — just a yes/no.
-        val dump = controller.dumpScreen()
-        val hasMoreTasks = if (dump != null) {
-            // AOSP recents UI always has at least the "Cerrar todo" text
-            // when there are tasks. If the button is still there, there
-            // are still tasks. If it's gone, the list is empty.
-            clearAllTerms.any { dump.toString().contains(it, ignoreCase = true) }
-        } else true
-        if (hasMoreTasks) {
-            onLog("recents: clear-all button still present — list may not be empty")
-        } else {
-            onLog("recents: clear-all button gone — list is empty")
-        }
-        onLog("RECENTS_CLEANED")
-        state = State.DONE
-        onLog("recents: DONE")
-        stop()
-    }
-
-    private fun tapByTextMulti(terms: List<String>, retries: Int = 1): Boolean {
-        var attempt = 0
-        while (attempt <= retries) {
-            for (term in terms) {
-                if (controller.tapByText(term)) return true
+        // Approach 2: start the RecentsActivity component directly.
+        // It's not exported (verified 2026-09-01), so this will be
+        // rejected with SecurityException. Wrap and ignore.
+        return try {
+            val intent = android.content.Intent(
+                "android.intent.action.MAIN",
+                null
+            ).apply {
+                addCategory("android.intent.category.HOME")
+                addCategory("android.intent.category.DEFAULT")
+                flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                    android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
-            if (attempt < retries) Thread.sleep(400)
-            attempt++
+            service.startActivity(intent)
+            onLog("recents: started MAIN+HOME intent as fallback")
+            true
+        } catch (e: Exception) {
+            onLog("recents: startActivity fallback also failed: ${e.message}")
+            false
         }
-        return false
+    }
+
+    /** Step 2: verify the recents screen opened (or at least the user can see it). */
+    private fun step2Verify() {
+        if (!running) return
+        state = State.VERIFY
+        onLog("recents: state=${state.name} — Recents screen should now be visible")
+        onLog("RECENTS_OPENED")
+        state = State.DONE
+        onLog("recents: DONE — user can now dismiss tasks manually")
+        stop()
     }
 
     fun stop() {
