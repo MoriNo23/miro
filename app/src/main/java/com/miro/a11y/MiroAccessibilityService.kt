@@ -99,7 +99,7 @@ class MiroAccessibilityService : AccessibilityService() {
  *   IDLE → OPENING_DEV_OPTIONS → CLICKING_WIRELESS_DEBUG → EXTRACTING_IP_PORT → SENDING_TO_PC → DONE
  *
  * Usa:
- *   - performGlobalAction() vía controller.globalAction() para QUICK_SETTINGS / SETTINGS
+ *   - performGlobalAction() vía controller.globalAction() para QUICK_SETTINGS
  *   - dispatchGesture() vía controller.tap() / tapByText() para clicks reales
  *   - getRootInActiveWindow() vía controller.dumpScreen() / findNode() para extraer IP:port
  *   - socket @miro vía onLog + un JSONObject de respuesta para handoff al host PC
@@ -154,8 +154,13 @@ class WirelessDebugAutomator(
         onLog("wireless debug: state=${state.name} — clicking Settings")
         val ok = tapByTextMulti(settingsTerms, fallback = true)
         if (!ok) {
-            onLog("wireless debug: could not find 'Settings' — opening via global action")
-            controller.globalAction(AccessibilityService.GLOBAL_ACTION_SETTINGS)
+            onLog("wireless debug: could not find 'Settings' text — tapping QS gear icon @ (480,160)")
+            // The gear icon in Quick Settings (OLAX tablet 1024x600) sits near the
+            // top-right of the QS tile grid. Tap coordinates as last resort.
+            ok = controller.tap(480f, 160f)
+            if (!ok) {
+                onLog("wireless debug: QS gear tap failed — will still proceed")
+            }
         }
         handler.postDelayed({ step3OpenDevOptions() }, 2000)
     }
