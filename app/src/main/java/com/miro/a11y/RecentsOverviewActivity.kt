@@ -81,14 +81,14 @@ class RecentsOverviewActivity : Activity() {
      * tap if we ever add one).
      */
     private fun loadTasks() {
-        val tasks = readRunningTasks()
+        val packages = readRunningTasks()
         val pm = packageManager
         val inflater = LayoutInflater.from(this)
 
         container.removeAllViews()
         rows.clear()
 
-        if (tasks.isEmpty()) {
+        if (packages.isEmpty()) {
             lblCount.text = "0 apps"
             lblEmpty.visibility = View.VISIBLE
             container.visibility = View.GONE
@@ -96,13 +96,10 @@ class RecentsOverviewActivity : Activity() {
         }
         lblEmpty.visibility = View.GONE
         container.visibility = View.VISIBLE
-        lblCount.text = "${tasks.size} apps corriendo"
+        lblCount.text = "${packages.size} apps corriendo"
 
-        for (task in tasks) {
-            val pkg = task.topActivity?.packageName ?: continue
-            if (pkg == packageName) continue  // skip ourselves
+        for (pkg in packages) {
             val appInfo = try {
-                @Suppress("DEPRECATION")
                 pm.getApplicationInfo(pkg, 0)
             } catch (_: PackageManager.NameNotFoundException) {
                 continue
@@ -125,17 +122,31 @@ class RecentsOverviewActivity : Activity() {
         }
     }
 
-    private fun readRunningTasks(): List<ActivityManager.RecentTaskInfo> {
+    private fun readRunningTasks(): List<String> {
+        // v1.4.22 used getRecentTasks() which only returns tasks in the
+        // recents tray (essentially empty for a freshly booted tablet
+        // where the user hasn't opened Recents). v1.4.23 switches to
+        // getRunningAppProcesses() which returns the actual list of
+        // processes that are alive right now — that's what the user
+        // expects from a "recent apps" view.
+        //
+        // The result is a list of package names (deduplicated, in
+        // importance order) so the caller can iterate without
+        // dealing with ActivityManager.RecentTaskInfo.
         val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        // maxNum=50 is fine for our use case; we only need the visible
-        // list, not a full process inventory.
-        @Suppress("DEPRECATION")
-        return try {
-            am.getRecentTasks(50, ActivityManager.RECENT_WITH_EXCLUDED)
-        } catch (e: Exception) {
-            Log.w(TAG, "recents overview: getRecentTasks failed: ${e.message}")
-            emptyList()
+        val packages = LinkedHashSet<String>()
+        for (info in am.runningAppProcesses ?: emptyArray()) {
+            // Skip our own process so the user doesn't accidentally
+            // close the RecentsOverviewActivity itself.
+            if (info.pkgList.isEmpty()) continue
+            for (pkg in info.pkgList) {
+                if (pkg == packageName) continue
+                if (pkg.startsWith("com.android.systemui")) continue
+                packages.add(pkg)
+            }
         }
+        Log.i(TAG, "recents overview: readRunningTasks -> ${packages.size} packages")
+        return packages.toList()
     }
 
     private fun onKillOne(pkg: String, label: String, row: View) {
@@ -159,9 +170,7 @@ class RecentsOverviewActivity : Activity() {
     private fun onCloseAll() {
         var killed = 0
         var failed = 0
-        for (task in readRunningTasks()) {
-            val pkg = task.topActivity?.packageName ?: continue
-            if (pkg == packageName) continue
+        for (pkg in readRunningTasks()) {
             if (MiroAccessibilityService.killPackageStatic(pkg)) {
                 killed++
             } else {
