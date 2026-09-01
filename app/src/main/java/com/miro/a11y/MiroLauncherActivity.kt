@@ -50,35 +50,53 @@ class MiroLauncherActivity : Activity() {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
 
-        // Run the toggle on a dedicated HandlerThread so the work
-        // continues even if the activity gets finished/moved to
-        // background quickly. The toggle sleeps ~3s (delays between
-        // setting writes); a plain Thread{} on a process with
-        // singleTask + taskAffinity="" can be killed by the OLAX ROM
-        // when the activity is no longer the top resumed activity.
+        // Run the toggle work on the MAIN thread using Handler.postDelayed.
+        // Why not a background Thread? On the OLAX ROM, when MiroLauncherActivity
+        // is invoked via 'am start' (manual) or as a HOME wrapper, the process
+        // gets killed almost immediately if the activity is not the top
+        // resumed activity. A background Thread{} gets killed with the process.
         //
-        // We use a foreground Service (RECEIVER_NOT_EXPORTED intent
-        // would be ideal but adds API surface; instead we use a
-        // service that the system will not kill while the toggle is
-        // running). Actually simpler: just use a plain Thread but
-        // DON'T call launchRealLauncher() and finish() until the
-        // toggle has been verified. The activity stays in foreground
-        // for ~3s, which is fine for a HOME wrapper.
-        Thread {
-            val ok = reenableAccessibility()
+        // By using the main thread, the work is tied to the activity
+        // lifecycle and runs as long as the activity is alive. We also
+        // explicitly request that the activity stays in the foreground
+        // for the duration of the toggle by NOT calling finish() until
+        // the toggle is verified.
+        //
+        // The toggle has ~3s of inter-write sleeps; the user sees Miro
+        // for that brief period before ESLauncher takes over.
+        startToggleSequence(attempt = 1)
+    }
+
+    private fun startToggleSequence(attempt: Int) {
+        Log.i(TAG, "toggle attempt $attempt starting")
+        // We need to do blocking writes (Settings.Secure.putString) which
+        // requires the main thread for some operations. The cleanest way
+        // is to do them inline with a Handler.postDelayed for the inter-write
+        // delays.
+        if (attempt > MAX_RETRIES) {
+            Log.e(TAG, "a11y toggle failed after $MAX_RETRIES attempts — manual fix needed")
             runOnUiThread {
-                if (ok) {
-                    launchRealLauncher()
-                } else {
-                    // Leave MiroLauncherActivity visible so the user
-                    // sees a system message ("a11y toggle failed
-                    // after 3 attempts") and can retry manually.
-                    Log.e(TAG, "a11y toggle failed — MiroLauncherActivity staying visible")
-                }
+                launchRealLauncher()
                 finish()
             }
-        }.start()
+            return
+        }
+        // Schedule the work on the main thread (no Thread{} — survives with
+        // the activity).
+        mainHandler.post {
+            val ok = doToggleOnce(attempt)
+            if (ok) {
+                Log.i(TAG, "a11y toggle verified on attempt $attempt")
+                launchRealLauncher()
+                finish()
+            } else {
+                Log.w(TAG, "a11y toggle attempt $attempt/$MAX_RETRIES failed — retrying in 1.5s")
+                mainHandler.postDelayed({ startToggleSequence(attempt + 1) }, 1500L)
+            }
+        }
     }
+
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     /**
      * Toggle de accesibilidad con 3 reintentos + verificación post-escritura.
