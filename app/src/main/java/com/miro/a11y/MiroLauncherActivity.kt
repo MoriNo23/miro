@@ -3,6 +3,7 @@ package com.miro.a11y
 import android.app.Activity
 import android.content.ComponentName
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
@@ -56,6 +57,23 @@ class MiroLauncherActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i(TAG, "launcher activity started (post-boot or manual)")
+
+        // Phase 1 fix (2026-09-01): verify WRITE_SECURE_SETTINGS BEFORE
+        // attempting the toggle. If the permission is missing (e.g. after
+        // a reinstall), the toggle would crash with SecurityException
+        // and leave the tablet with a black screen (the activity stays
+        // visible because we never reach launchRealLauncher()).
+        if (!hasWriteSecureSettings()) {
+            Log.e(TAG, "WRITE_SECURE_SETTINGS not granted — cannot toggle a11y. " +
+                    "User must run: adb shell pm grant com.miro.a11y " +
+                    "android.permission.WRITE_SECURE_SETTINGS")
+            // Fall back: launch the real launcher so the user is not stuck
+            // on a black screen. The service will stay unbound until the
+            // permission is granted and the tablet is rebooted again.
+            launchRealLauncher()
+            moveToBack()
+            return
+        }
 
         // Run the toggle work on the MAIN thread using Handler.postDelayed.
         // Why not a background Thread? On the OLAX ROM, when MiroLauncherActivity
@@ -134,6 +152,20 @@ class MiroLauncherActivity : Activity() {
     }
 
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    /**
+     * Returns true if WRITE_SECURE_SETTINGS is granted to this package.
+     *
+     * This is a runtime check (not a manifest declaration) because the
+     * permission can be revoked by the system or lost on reinstall. The
+     * declaration is in AndroidManifest.xml with tools:ignore="ProtectedPermissions"
+     * (Android would refuse to install the APK with this permission unless
+     * it is granted via `pm grant` from a host shell).
+     */
+    private fun hasWriteSecureSettings(): Boolean {
+        return checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                PackageManager.PERMISSION_GRANTED
+    }
 
     /**
      * Toggle de accesibilidad con 3 reintentos + verificación post-escritura.
