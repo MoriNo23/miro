@@ -217,7 +217,24 @@ class WirelessDebugAutomator(
         if (!ok) {
             onLog("wireless debug: QUICK_SETTINGS failed")
         }
+        // Even if globalAction() returned false (it can be flaky on
+        // OLAX just after a wakeup), we still go to step 2: the QS
+        // may have opened anyway. Step 2 will fail loudly if it didn't.
         handler.postDelayed({ step2TapWirelessDebugTile() }, 1500)
+    }
+
+    /**
+     * Alternative way to open the QS panel via a swipe-down gesture.
+     * Used as a fallback if performGlobalAction(QUICK_SETTINGS) returns
+     * false consistently.
+     */
+    private fun openQsViaSwipe(): Boolean {
+        onLog("wireless debug: openQsViaSwipe — swiping down from top of screen")
+        val w = 512
+        val h = 5
+        val targetY = 380
+        val d = 250L
+        return controller.swipe(w.toFloat(), h.toFloat(), w.toFloat(), targetY.toFloat(), d)
     }
 
     /** Step 2: tap the "Depuración inalámbrica" tile in the QS grid. */
@@ -230,10 +247,28 @@ class WirelessDebugAutomator(
             "Wireless debug", "wireless debugging")
         val ok = tapByTextMulti(tileTerms, fallback = false)
         if (!ok) {
-            onLog("wireless debug: tile not found in QS")
-            stopWithError("wireless debug tile not found in QS")
+            // Maybe QS didn't open with performGlobalAction. Try
+            // opening it with a swipe-down gesture and re-search.
+            onLog("wireless debug: tile not found in QS — trying swipe-down to open QS")
+            val sw = openQsViaSwipe()
+            if (!sw) {
+                onLog("wireless debug ERROR: could not open QS even via swipe")
+                stopWithError("wireless debug tile not found in QS")
+                return
+            }
+            handler.postDelayed({
+                val ok2 = tapByTextMulti(tileTerms, fallback = false)
+                if (!ok2) {
+                    onLog("wireless debug ERROR: tile still not found after swipe-open")
+                    stopWithError("wireless debug tile not found in QS")
+                    return
+                }
+                onLog("wireless debug: tile tapped after swipe-open")
+                handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
+            }, 1500)
             return
         }
+        onLog("wireless debug: tile tapped")
         handler.postDelayed({ step3CheckAlwaysAllow() }, 2000)
     }
 
