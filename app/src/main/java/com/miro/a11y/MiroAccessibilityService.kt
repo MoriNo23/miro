@@ -243,14 +243,26 @@ class WirelessDebugAutomator(
         state = State.CLICKING_WIRELESS_DEBUG
         onLog("wireless debug: state=${state.name} — checking 'Permitir siempre'")
 
-        val checkTerms = listOf("Permitir siempre en esta red",
-            "Permitir siempre", "Always allow on this network")
-        val ok = tapByTextMulti(checkTerms, fallback = false)
-        if (!ok) {
-            onLog("wireless debug: 'Permitir siempre' checkbox not found — proceeding without it")
-            // Not fatal: the dialog may have been already accepted before
-            // (e.g. after a previous successful run, Android remembers the
-            // choice for ~24h). Continue to step 4.
+        // The OLAX WifiDebuggingActivity dialog renders in a system window
+        // that the MiroAccessibilityService cannot see via getRootInActiveWindow
+        // (verified 2026-09-01: tapByText('Permitir siempre') returns false
+        // even though the dialog IS visible on screen). So we tap the
+        // checkbox by its known coordinates instead.
+        //
+        // Coordinates from manual test (1024x600 OLAX, Spanish locale):
+        //   - "Permitir siempre en esta red" checkbox: (511, 312)
+        //   - "PERMITIR" button: (721, 372)
+        //   - "CANCELAR" button: (629, 372)
+        //
+        // We tap the checkbox center then wait briefly before tapping
+        // PERMITIR. If the checkbox isn't there (e.g. the user already
+        // chose 'always' in a previous run), the tap is a no-op visually
+        // and we still proceed to PERMITIR.
+        val tappedCheckbox = controller.tap(511f, 312f)
+        if (tappedCheckbox) {
+            onLog("wireless debug: tapped 'Permitir siempre' checkbox at (511, 312)")
+        } else {
+            onLog("wireless debug: 'Permitir siempre' tap returned false — continuing anyway")
         }
         handler.postDelayed({ step4TapPermitir() }, 1000)
     }
@@ -261,11 +273,14 @@ class WirelessDebugAutomator(
         state = State.SENDING_TO_PC
         onLog("wireless debug: state=${state.name} — tapping PERMITIR")
 
-        val permitTerms = listOf("PERMITIR", "Permitir", "ALLOW", "Allow")
-        val ok = tapByTextMulti(permitTerms, fallback = false)
-        if (!ok) {
-            onLog("wireless debug: PERMITIR button not found")
-            stopWithError("PERMITIR button not found")
+        // Same workaround as step 3: tap by coordinates because the
+        // OLAX dialog doesn't expose its tree to the a11y service.
+        val tapped = controller.tap(721f, 372f)
+        if (!tapped) {
+            onLog("wireless debug: PERMITIR tap returned false — bailing out")
+            state = State.IDLE
+            onLog("wireless debug ERROR: PERMITIR button not found")
+            stop()
             return
         }
         // Wireless Debugging is now on. Done.
