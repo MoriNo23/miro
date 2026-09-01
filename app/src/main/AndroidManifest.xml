@@ -10,6 +10,10 @@
         tools:ignore="ProtectedPermissions" />
     <uses-permission
         android:name="android.permission.INTERNET" />
+    <!-- POST_NOTIFICATIONS required on Android 13+ to show the
+         "Cerrar recientes" persistent notification (RecentTasksNotifier). -->
+    <uses-permission
+        android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
