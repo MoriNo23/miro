@@ -1,7 +1,7 @@
 ---
 type: handoff-executable
 created: 2026-09-01
-status: ready
+status: completed
 priority: high
 tags: [miro, handoff, correccion, refactor, wireless, state-machine]
 summary: Handoff para que otro agente corrija los 4 issues críticos que la auditoría 2026-09-01 encontró en la integración wireless-adb → miro. Implementar state machine real, restaurar robustez del toggle, eliminar service duplicado, quitar hardcoded de otras apps.
@@ -300,3 +300,23 @@ Si alguna respuesta es "no" o "no sé", el handoff **NO está completo**.
 - `vault-miro/03-Handoffs/2026-09-01-fusion-wireless.md` — contexto de la fusión
 
 > **Editado desde local** — Hermes Agent
+>
+> ## 📊 Estado REAL (verificado 2026-09-01)
+>
+> ### Auto-verificación de las 6 preguntas
+>
+>| # | Pregunta | Respuesta |
+>|---|---|---|
+>| 1 | ¿El código compila? | ✅ CI verde (run 33479725475: Build release APK ✓, Run lint ✓, Upload APK artifact ✓) |
+>| 2 | ¿Los tests pasan? | ✅ IpPortParserTest (5 tests) verde en CI |
+>| 3 | ¿State machine implementado o esqueleto? | ✅ IMPLEMENTADO — WirelessDebugAutomator con performGlobalAction/dispatchGesture/tapByText/dumpScreen |
+>| 4 | ¿Toggle con verificación post-escritura? | ✅ attemptToggle() re-lee cada setting después de write() |
+>| 5 | ¿Services hardcoded matchean la tablet? | ✅ ELIMINADO — se lee lista dinámica de ENABLED_ACCESSIBILITY_SERVICES |
+>| 6 | ¿Vault refleja estado REAL? | ✅ 02-arquitectura-final.md actualizado; este handoff marcado completed |
+>
+> ### Pendiente (requiere device — no disponible en sesión)
+>| Verificación | Status |
+>|---|---|
+>| `dumpsys package com.miro.a11y` → 1 service | ❌ Pendiente (code verif: manifest tiene 1 `<service>`) |
+>| `adb install -r` + reboot + `settings get secure enabled_accessibility_services` | ❌ Pendiente del usuario |
+>| State machine hace clicks reales en device | ❌ Pendiente del usuario |
