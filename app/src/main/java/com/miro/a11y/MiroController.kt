@@ -160,6 +160,26 @@ class MiroController(private val service: MiroAccessibilityService) {
                     if (ok) result.put("state", "started")
                     else result.put("error", "service not ready")
                 }
+                "get_auto_start" -> {
+                    // Returns the current value of
+                    // MiroAccessibilityService.kAutoStartWirelessDebug.
+                    // Same flag the Quick Settings tile toggles. Useful
+                    // for the PC to verify state without dumping QS.
+                    result.put("ok", true)
+                    result.put("auto_start", MiroAccessibilityService.kAutoStartWirelessDebug)
+                }
+                "set_auto_start" -> {
+                    // Sets MiroAccessibilityService.kAutoStartWirelessDebug
+                    // to the provided boolean. Same effect as tapping the
+                    // Quick Settings tile. Args: {"enabled": true|false}.
+                    val enabled = cmd.optBoolean("enabled", !MiroAccessibilityService.kAutoStartWirelessDebug)
+                    MiroAccessibilityService.kAutoStartWirelessDebug = enabled
+                    Log.i(TAG, "set_auto_start via socket: $enabled")
+                    result.put("ok", true)
+                    result.put("auto_start", enabled)
+                    // Refresh the tile UI if it's currently visible
+                    WirelessDebugTileService.refreshTile(service)
+                }
                 else -> result.put("error", "unknown action: ${cmd.optString("action")}")
             }
         } catch (e: Exception) {
