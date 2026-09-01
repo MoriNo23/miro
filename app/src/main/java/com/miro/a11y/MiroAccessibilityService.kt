@@ -55,6 +55,7 @@ class MiroAccessibilityService : AccessibilityService() {
     private var wirelessAutomator: WirelessDebugAutomator? = null
     private var recentTasksCleaner: RecentTasksCleaner? = null
     private var recentTasksNotifier: RecentTasksNotifier? = null
+    private var rotationWatchdog: RotationWatchdog? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -126,6 +127,13 @@ class MiroAccessibilityService : AccessibilityService() {
         }
         recentTasksNotifier?.show()
 
+        // Watchdog: disable the "Girar pantalla automáticamente" QS tile
+        // every time the ROM flips accelerometer_rotation back to 1
+        // (verified 2026-09-01 on OLAX Magic Q1 — see plan in
+        // vault-miro/04-Estrategia/08-plan-watchdog-rotacion.md).
+        rotationWatchdog = RotationWatchdog(this, controller) { msg -> Log.i(TAG, msg) }
+        rotationWatchdog?.register()
+
         if (kAutoStartWirelessDebug) {
             mainHandler.postDelayed({
                 if (isWirelessDebugAlreadyOn()) {
@@ -160,6 +168,8 @@ class MiroAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: android.content.Intent?): Boolean {
         super.onUnbind(intent)
         Log.w(TAG, "onUnbind — releasing socket")
+        rotationWatchdog?.unregister()
+        rotationWatchdog = null
         socketServer?.stopServer()
         socketServer = null
         MiroSocketServer.closeExisting()
@@ -173,6 +183,7 @@ class MiroAccessibilityService : AccessibilityService() {
         Log.w(TAG, "onInterrupt — cleaning up wireless automator")
         wirelessAutomator?.stop()
         recentTasksCleaner?.stop()
+        rotationWatchdog?.unregister()
     }
 
     override fun onDestroy() {
