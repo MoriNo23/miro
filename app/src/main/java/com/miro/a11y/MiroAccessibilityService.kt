@@ -152,7 +152,7 @@ class WirelessDebugAutomator(
         if (!running) return
         state = State.OPENING_DEV_OPTIONS
         onLog("wireless debug: state=${state.name} — clicking Settings")
-        val ok = tapByTextMulti(settingsTerms, fallback = true)
+        var ok = tapByTextMulti(settingsTerms, fallback = true)
         if (!ok) {
             onLog("wireless debug: could not find 'Settings' text — tapping QS gear icon @ (480,160)")
             // The gear icon in Quick Settings (OLAX tablet 1024x600) sits near the
