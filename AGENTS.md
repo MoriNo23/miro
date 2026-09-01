@@ -47,6 +47,24 @@
 - Si el commit dice "feat:" debe haber funcionalidad, no solo scaffolding.
 - **Antes de cerrar**: revisar las 6 preguntas de auto-verificación en `vault-miro/06-Reglas/01-anti-alucinacion.md`.
 
+### 7. NO trucos de la PC para "validar" el automation de la APK (2026-09-01)
+- **Regla de Mori**: el auto-arranque post-reboot tiene que venir **100% de la APK** (`MiroLauncherActivity` HOME wrapper + `MiroAccessibilityService` flow OLAX QS-tile).
+- **PROHIBIDO** tener servicios systemd, scripts en `~/.hermes/scripts/`, o cualquier hook en la PC que active `adb_wifi_enabled` o conecte la tablet automáticamente cuando se enchufa el USB.
+- El "test post-reboot" tiene que hacerse **sin USB** después del primer boot. Si wireless debug no queda ON sin trucos, **el automation no funciona** y hay que arreglar la APK.
+- **Truco borrado 2026-09-01**: `/home/fullmetal/.config/systemd/user/adb-wifi-persist.service` (`ExecStart=/usr/bin/python3 /home/fullmetal/adb_wifi_persist.py`). No recrear. Ver handoff `2026-09-01-loophack-adb-wifi-persist-borrado.md`.
+- **Truco borrado también**: cualquier `udev` rule que haga `adb tcpip 5555` o `adb shell settings put global adb_wifi_enabled 1` cuando se conecta USB. Buscar con:
+  ```bash
+  grep -rl "adb_wifi\|adb tcpip" /etc/udev/rules.d/ ~/.config/systemd/ ~/.hermes/scripts/ ~/.local/bin/
+  ```
+
+### 8. Regla de handoff obligatorio en compactación de session (2026-09-01)
+- **SIEMPRE** que Hermes compacte la session o el agente se dé a "continuar" desde un summary, **ANTES de tocar nada**:
+  1. **Revisar el último handoff** en `vault-miro/03-Handoffs/`. Si no hay uno reciente (mismo día), crearlo.
+  2. **Revisar el vault** completo (`vault-miro/00-MOC.md` como índice).
+  3. **Verificar que no haya trucos de la PC** (regla #7) activos.
+  4. **Reportar al usuario** qué se encontró y qué se va a hacer, ANTES de ejecutar.
+- Esto evita repetir errores y mantener assumptions falsas.
+
 ## 📂 Estructura del repo
 
 ```
