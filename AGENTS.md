@@ -65,6 +65,24 @@
   4. **Reportar al usuario** qué se encontró y qué se va a hacer, ANTES de ejecutar.
 - Esto evita repetir errores y mantener assumptions falsas.
 
+### 9. NO dar nada por "logrado" sin reboot real (2026-09-01)
+- `am start` no cuenta. `MiroLauncherActivity` arrancada con `adb shell am start` solo valida que el código corre, **no** que el auto-arranque post-boot funciona.
+- **Único test válido**: `adb -s <serial> reboot` → esperar 120s → `adb_tablet --status` → wireless=1, service BOUND, ESLauncher top.
+- Sin este reboot real, el flow NO está "logrado" — puede tener un bug que solo se manifiesta en el primer boot.
+- No decir "logrado", "validado", "funciona end-to-end" sin haber pasado por este paso.
+
+### 10. El service se bindea SOLO cuando MiroLauncherActivity es launcher (2026-09-01)
+- El service se bindea **únicamente** cuando `MiroLauncherActivity` es el HOME activo, ejecuta el toggle, y hace handoff a `ESLauncher`.
+- `Thread{}` separados para el toggle → el service NO se bindea. El toggle debe correr en `mainHandler.post { ... }` de la activity, atado al lifecycle de la activity que es launcher.
+- `Theme.NoDisplay` + `MiroApplication` con toggle → el toggle corre pero el service NO se bindea. Mantener `Theme.Translucent.NoTitleBar` + activity-anchored toggle.
+- El patrón correcto está en `MiroLauncherActivity.onCreate`: `mainHandler.post { runToggleAndHandoff(1) }` con `ensureServiceInListStatic()` antes.
+
+### 11. NO celebrar si no se probó en reboot (2026-09-01)
+- Un test que pasa con `am start` o vía socket no es "logrado", es "compila y arranca".
+- **Frase prohibida** post-instalación: "funciona", "logrado", "validado", "end-to-end", "todo OK", "ya está".
+- **Frase permitida** post-instalación: "el código compila y arranca, falta probar en reboot real".
+- La celebración se gana con reboot real + verificación post-boot (regla #9).
+
 ## 📂 Estructura del repo
 
 ```
