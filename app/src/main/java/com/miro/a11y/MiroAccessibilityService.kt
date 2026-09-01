@@ -416,7 +416,9 @@ class RecentTasksCleaner(
         val opened = openRecentsScreen()
         if (!opened) {
             onLog("recents: failed to open Recents screen — bailing out")
-            stopWithError("could not open recents screen")
+            state = State.IDLE
+            onLog("recents ERROR: could not open recents screen")
+            stop()
             return
         }
         handler.postDelayed({ step2Verify() }, 2000)
