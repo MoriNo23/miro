@@ -28,7 +28,15 @@ class MiroLauncherActivity : Activity() {
 
     companion object {
         private const val TAG = "miro"
-        private const val SERVICE = "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
+        // Canonical form: short class name. The system may also accept/store
+        // the full form "com.miro.a11y/com.miro.a11y.MiroAccessibilityService"
+        // but it's the same service. Use the package as the identity for
+        // filtering so we don't get duplicate entries (one per format) when
+        // the user adds the service manually before our toggle runs.
+        private const val SERVICE_PKG = "com.miro.a11y"
+        private const val SERVICE_CLS = "com.miro.a11y.MiroAccessibilityService"
+        // Canonical string written into ENABLED_ACCESSIBILITY_SERVICES.
+        private const val SERVICE_CANONICAL = "$SERVICE_PKG/$SERVICE_CLS"
         private const val REAL_LAUNCHER_PKG = "com.android.launcher3"
         private const val REAL_LAUNCHER_CLS = "com.android.launcher3.ESLauncher"
 
@@ -82,16 +90,23 @@ class MiroLauncherActivity : Activity() {
     private fun attemptToggle(attempt: Int): Boolean {
         val cr = contentResolver
 
-        // Read current list dynamically (issue 4 — no OTHER_SERVICES constant)
+        // Read current list dynamically (issue 4 — no OTHER_SERVICES constant).
+        // Strip any entry that resolves to com.miro.a11y/.MiroAccessibilityService
+        // regardless of whether it's stored in the short form (com.miro.a11y/cls)
+        // or full form (com.miro.a11y/com.miro.a11y.MiroAccessibilityService).
+        // This prevents duplicate entries on the next toggle when the user
+        // added the service manually with a different format.
         val current = Settings.Secure.getString(
             cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: ""
 
-        // Step 1: remove our service (case-insensitive match on the full "pkg/cls")
         val filtered = current.split(":")
-            .filter { it.trim().lowercase() != SERVICE.lowercase() }
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+            .filter { entry ->
+                val pkg = entry.substringBefore("/")
+                pkg != SERVICE_PKG
+            }
             .joinToString(":")
 
         Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, filtered)
@@ -108,13 +123,17 @@ class MiroLauncherActivity : Activity() {
         // Step 3: Wait for the system to process the disable
         Thread.sleep(A11Y_TOGGLE_DELAY_MS)
 
-        // Step 4: Re-add our service
-        val newList = if (filtered.isEmpty()) SERVICE else "$filtered:$SERVICE"
+        // Step 4: Re-add our service in canonical form
+        val newList = if (filtered.isEmpty()) SERVICE_CANONICAL else "$filtered:$SERVICE_CANONICAL"
         Settings.Secure.putString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, newList)
         Thread.sleep(VERIFY_DELAY_MS)
-        if (Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-                ?.contains(SERVICE, ignoreCase = true) != true) {
-            Log.w(TAG, "[$attempt] re-add verification failed")
+        // Verify by package, not by full string (in case Android normalizes the format)
+        val after = Settings.Secure.getString(cr, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        val ourEntries = after.split(":").map { it.trim() }.filter {
+            it.substringBefore("/") == SERVICE_PKG
+        }
+        if (ourEntries.isEmpty()) {
+            Log.w(TAG, "[$attempt] re-add verification failed (no entry for $SERVICE_PKG)")
             return false
         }
 
