@@ -1,7 +1,7 @@
 ---
 type: handoff-executable
 created: 2026-09-01
-status: ready
+status: completed
 tags: [miro, handoff, ejecutar, codigo, wireless]
 summary: Handoff ejecutable para que otro agente (vos en otra terminal) integre el código de wireless-adb dentro de com.miro.a11y. Pasos discretos, paths absolutos, sin compilar localmente.
 ---
