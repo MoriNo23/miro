@@ -76,14 +76,16 @@ class MiroSocketServer(
         lastInstance = this
     }
 
-    @Volatile private var running = true
+    @Volatile var running = true
     private var server: LocalServerSocket? = null
+    @Volatile var openSucceeded: Boolean = false
 
     override fun run() {
         try {
             server = LocalServerSocket(SOCKET_NAME)
             onLog("miro socket listening on @$SOCKET_NAME")
             Log.i(TAG, "listening on @$SOCKET_NAME")
+            openSucceeded = true
             while (running) {
                 val client: LocalSocket = try {
                     server!!.accept()
@@ -95,6 +97,7 @@ class MiroSocketServer(
             }
         } catch (e: Exception) {
             Log.e(TAG, "server error: ${e.message}")
+            openSucceeded = false
         } finally {
             try { server?.close() } catch (_: Exception) {}
         }

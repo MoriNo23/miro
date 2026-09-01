@@ -86,17 +86,29 @@ class MiroAccessibilityService : AccessibilityService() {
                 try {
                     val s = MiroSocketServer(controller) { msg -> Log.d(TAG, msg) }
                     s.start()
-                    // Give the server thread a moment to actually open
-                    // the socket. We can't know if it succeeded without
-                    // a callback, but LocalServerSocket's bind is
-                    // synchronous — if it threw, the thread would die
-                    // and we'd see the error in logcat.
-                    Thread.sleep(100)
-                    socketServer = s
-                    Log.i(TAG, "miro socket ready (attempt $attempt)")
-                    return@Thread
+                    // Wait for the server thread to actually open the
+                    // socket. The LocalServerSocket bind is synchronous
+                    // inside run(), but s.start() returns immediately.
+                    // We poll openSucceeded for up to 1 second.
+                    var waited = 0
+                    while (waited < 1000 && !s.openSucceeded && s.running) {
+                        try { Thread.sleep(50) } catch (_: InterruptedException) {}
+                        waited += 50
+                    }
+                    if (s.openSucceeded) {
+                        socketServer = s
+                        Log.i(TAG, "miro socket ready (attempt $attempt)")
+                        return@Thread
+                    } else {
+                        // The thread died (likely "Address already in use").
+                        // Stop it and retry.
+                        Log.w(TAG, "miro socket attempt $attempt did not open — retrying in ${backoffMs}ms")
+                        s.stopServer()
+                        try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
+                        backoffMs *= 2
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "miro socket attempt $attempt/$maxAttempts failed: ${e.message} — backing off ${backoffMs}ms")
+                    Log.w(TAG, "miro socket attempt $attempt/$maxAttempts threw: ${e.message} — backing off ${backoffMs}ms")
                     try { Thread.sleep(backoffMs) } catch (_: InterruptedException) {}
                     backoffMs *= 2
                 }
